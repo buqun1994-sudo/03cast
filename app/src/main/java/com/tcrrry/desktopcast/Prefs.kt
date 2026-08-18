@@ -7,6 +7,8 @@ object Prefs {
     const val NAME = "settings"
 
     const val DEF_SERVER_NAME = "03投屏"
+    const val DRIVING_PLAYBACK_GUARD = "driving_playback_guard"
+    const val DEF_DRIVING_PLAYBACK_GUARD = true
     const val FALLBACK_MAC_ADDRESS = "fallback_mac_address"
     val KEY_PRIORITY: String = MediaFormat.KEY_PRIORITY; const val DEF_KEY_PRIORITY = true
     const val LOW_LATENCY = "low_latency"; const val DEF_LOW_LATENCY = false

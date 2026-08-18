@@ -24,6 +24,17 @@ enum class CastContentKind {
     IMAGE,
 }
 
+enum class CastSessionEndReason {
+    USER_REQUEST,
+    REMOTE_DISCONNECTED,
+}
+
+data class CastSessionEndEvent(
+    val sequence: Long,
+    val protocol: CastProtocol,
+    val reason: CastSessionEndReason,
+)
+
 data class CastSessionState(
     val phase: CastPhase = CastPhase.STOPPED,
     val protocol: CastProtocol? = null,

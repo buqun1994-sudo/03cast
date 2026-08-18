@@ -92,6 +92,19 @@ internal class AirPlayPlaybackAdapter(
         activeLease()?.let { host.scrubNetworkPlayback(it, positionMs / 1000f) }
     }
 
+    fun blockOutputForDrivingSafety() {
+        airPlayConnections.set(0)
+        releaseOutput()
+    }
+
+    fun disconnectFromUi() = host.runOnMain {
+        val activeLease = activeLease() ?: return@runOnMain
+        host.dropAirPlayConnections()
+        airPlayConnections.set(0)
+        releaseOutput()
+        host.disconnectImmediately(activeLease)
+    }
+
     fun releaseOutput() {
         lease?.let(host::stopNetworkPlayback)
         mirrorActive = false
@@ -188,7 +201,7 @@ internal class AirPlayPlaybackAdapter(
             host.runOnMain {
                 val activeLease = activeLease() ?: return@runOnMain
                 releaseOutput()
-                host.disconnect(activeLease)
+                host.deferRemoteDisconnect(activeLease)
             }
         }
         Log.i(TAG, "AirPlay client disconnected ($remaining)")
@@ -268,7 +281,7 @@ internal class AirPlayPlaybackAdapter(
         if (!host.isNetworkPlaybackActive(activeLease)) return@runOnMain
         host.stopNetworkPlayback(activeLease)
         lease = null
-        host.disconnect(activeLease)
+        host.deferRemoteDisconnect(activeLease)
     }
 
     override fun onVideoSessionPoll() = host.runOnMain(::ensureLease)
@@ -312,7 +325,7 @@ internal class AirPlayPlaybackAdapter(
         if (!host.isNetworkPlaybackActive(activeLease)) return
         host.stopNetworkPlayback(activeLease)
         lease = null
-        host.disconnect(activeLease)
+        host.deferRemoteDisconnect(activeLease)
     }
 
     override fun onError(message: String) {

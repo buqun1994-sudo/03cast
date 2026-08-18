@@ -2,6 +2,26 @@
 
 set -euo pipefail
 
+INSTALL_MODE="install-only"
+case "${1:-}" in
+    ""|--install-only)
+        ;;
+    --runtime-smoke)
+        INSTALL_MODE="runtime-smoke"
+        ;;
+    -h|--help)
+        echo "用法：$0 [--install-only|--runtime-smoke]"
+        echo "默认只覆盖安装 Debug APK，不启动应用。"
+        echo "--runtime-smoke：覆盖安装、启动并检查进程、服务和监听端口。"
+        exit 0
+        ;;
+    *)
+        echo "未知参数：$1" >&2
+        echo "用法：$0 [--install-only|--runtime-smoke]" >&2
+        exit 2
+        ;;
+esac
+
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCAL_ANDROID_PROPERTIES="$PROJECT_ROOT/local.properties"
 DEBUG_APK="$PROJECT_ROOT/app/build/outputs/apk/debug/app-debug.apk"
@@ -39,14 +59,38 @@ if [[ "$APK_PACKAGE" != "$EXPECTED_PACKAGE" ]]; then
     exit 1
 fi
 
-if [[ "$($ANDROID_ADB_BIN get-state 2>/dev/null || true)" != "device" ]]; then
+TARGET_SERIAL="${ANDROID_DEVICE_SERIAL:-}"
+if [[ -z "$TARGET_SERIAL" ]]; then
+    while IFS= read -r serial; do
+        [[ -z "$serial" ]] && continue
+        device_model="$($ANDROID_ADB_BIN -s "$serial" shell getprop ro.product.model | tr -d '\r')"
+        if [[ "$device_model" == "S56_HQX" ]]; then
+            if [[ -n "$TARGET_SERIAL" ]]; then
+                echo "检测到多个 S56_HQX 车机，请设置 ANDROID_DEVICE_SERIAL。" >&2
+                exit 1
+            fi
+            TARGET_SERIAL="$serial"
+        fi
+    done < <("$ANDROID_ADB_BIN" devices | awk 'NR > 1 && $2 == "device" { print $1 }')
+fi
+
+if [[ -z "$TARGET_SERIAL" ]]; then
     echo "车机未处于可用连接状态。" >&2
     exit 1
 fi
 
-DEVICE_MODEL="$($ANDROID_ADB_BIN shell getprop ro.product.model | tr -d '\r')"
-DEVICE_SDK="$($ANDROID_ADB_BIN shell getprop ro.build.version.sdk | tr -d '\r')"
-DEVICE_SIZE="$($ANDROID_ADB_BIN shell wm size | tr -d '\r')"
+adb_target() {
+    "$ANDROID_ADB_BIN" -s "$TARGET_SERIAL" "$@"
+}
+
+if [[ "$(adb_target get-state 2>/dev/null || true)" != "device" ]]; then
+    echo "车机未处于可用连接状态：$TARGET_SERIAL" >&2
+    exit 1
+fi
+
+DEVICE_MODEL="$(adb_target shell getprop ro.product.model | tr -d '\r')"
+DEVICE_SDK="$(adb_target shell getprop ro.build.version.sdk | tr -d '\r')"
+DEVICE_SIZE="$(adb_target shell wm size | tr -d '\r')"
 
 if [[ "$DEVICE_MODEL" != "S56_HQX" || "$DEVICE_SDK" != "28" || "$DEVICE_SIZE" != *"1920x1080"* ]]; then
     echo "设备基线不匹配：model=$DEVICE_MODEL sdk=$DEVICE_SDK size=$DEVICE_SIZE" >&2
@@ -54,16 +98,21 @@ if [[ "$DEVICE_MODEL" != "S56_HQX" || "$DEVICE_SDK" != "28" || "$DEVICE_SIZE" !=
 fi
 
 echo "目标车机：$DEVICE_MODEL / Android SDK $DEVICE_SDK / 1920x1080"
-"$ANDROID_ADB_BIN" install -r -g "$DEBUG_APK"
-"$ANDROID_ADB_BIN" shell am start -n "$EXPECTED_COMPONENT"
+adb_target install -r -g "$DEBUG_APK"
+if [[ "$INSTALL_MODE" == "install-only" ]]; then
+    echo "Debug APK 已覆盖安装，未启动应用；等待用户手测。"
+    exit 0
+fi
+
+adb_target shell am start -n "$EXPECTED_COMPONENT"
 
 PROCESS_ID=""
 SERVICE_STATE=""
 LISTEN_STATE=""
 for _ in {1..40}; do
-    PROCESS_ID="$($ANDROID_ADB_BIN shell pidof "$EXPECTED_PACKAGE" 2>/dev/null | tr -d '\r' || true)"
-    SERVICE_STATE="$($ANDROID_ADB_BIN shell dumpsys activity services "$EXPECTED_PACKAGE" 2>/dev/null | tr -d '\r' || true)"
-    LISTEN_STATE="$($ANDROID_ADB_BIN shell netstat -an 2>/dev/null | tr -d '\r' || true)"
+    PROCESS_ID="$(adb_target shell pidof "$EXPECTED_PACKAGE" 2>/dev/null | tr -d '\r' || true)"
+    SERVICE_STATE="$(adb_target shell dumpsys activity services "$EXPECTED_PACKAGE" 2>/dev/null | tr -d '\r' || true)"
+    LISTEN_STATE="$(adb_target shell netstat -an 2>/dev/null | tr -d '\r' || true)"
     if [[ -n "$PROCESS_ID" && "$SERVICE_STATE" == *"$EXPECTED_SERVICE"* &&
         "$LISTEN_STATE" == *":7000"* && "$LISTEN_STATE" == *":8200"* ]]; then
         break
@@ -86,7 +135,7 @@ if [[ "$LISTEN_STATE" != *":7000"* || "$LISTEN_STATE" != *":8200"* ]]; then
     exit 1
 fi
 
-LAST_UPDATE_TIME="$($ANDROID_ADB_BIN shell dumpsys package "$EXPECTED_PACKAGE" | tr -d '\r' | sed -n 's/^[[:space:]]*lastUpdateTime=//p' | head -n 1)"
+LAST_UPDATE_TIME="$(adb_target shell dumpsys package "$EXPECTED_PACKAGE" | tr -d '\r' | sed -n 's/^[[:space:]]*lastUpdateTime=//p' | head -n 1)"
 echo "应用进程：$PROCESS_ID"
 echo "AirPlay 7000 / DLNA 8200：监听中"
 echo "覆盖时间：$LAST_UPDATE_TIME"

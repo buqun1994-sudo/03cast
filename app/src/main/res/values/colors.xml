@@ -10,4 +10,15 @@
     <color name="cast_control_scrim_light">#66000000</color>
     <color name="cast_control_foreground">#FFFFFFFF</color>
     <color name="cast_error">#FFC83C4A</color>
+    <color name="cast_settings_sidebar_background">#EBF3F3F3</color>
+    <color name="cast_settings_content_background_start">#F6FCFBFC</color>
+    <color name="cast_settings_content_background_center">#F9FDFDFD</color>
+    <color name="cast_settings_content_background_end">#FFFFFFFF</color>
+    <color name="cast_settings_card_background">#4DA4A6BD</color>
+    <color name="cast_settings_switch_track_off">#33A5ABAF</color>
+    <color name="cast_settings_switch_thumb">#FFFFFFFF</color>
+    <color name="cast_danger">#FFC43B42</color>
+    <color name="cast_dialog_scrim">#B3000000</color>
+    <color name="cast_safety_background">#FF000000</color>
+    <color name="cast_dialog_background">#FFF5F6FA</color>
 </resources>

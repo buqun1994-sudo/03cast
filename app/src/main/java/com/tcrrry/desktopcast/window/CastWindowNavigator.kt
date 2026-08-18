@@ -1,6 +1,7 @@
 package com.tcrrry.desktopcast.window
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.ActivityOptions
 import android.content.Intent
 import android.graphics.Rect
@@ -101,6 +102,16 @@ class CastWindowNavigator(
         if (serviceProvider()?.cancelWindowHandoff(token) == true) {
             activity.stopService(Intent(activity, CastService::class.java))
         }
+    }
+
+    /** Closes every task owned by this package, including a background handoff task. */
+    fun finishAllTasks() {
+        cancelPendingHandoff()
+        val activityManager = activity.getSystemService(Activity.ACTIVITY_SERVICE) as? ActivityManager
+        activityManager?.appTasks?.toList()?.forEach { task ->
+            runCatching { task.finishAndRemoveTask() }
+        }
+        if (!activity.isFinishing) activity.finishAndRemoveTask()
     }
 
     private fun targetIntent(transition: CastWindowTransition, token: Long): Intent {

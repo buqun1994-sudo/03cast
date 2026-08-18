@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Surface
 import android.view.SurfaceHolder
+import androidx.media3.common.Player
 import com.tcrrry.desktopcast.bridge.RaopCallbackHandler
 import com.tcrrry.desktopcast.dlna.DlnaPlaybackController
 import com.tcrrry.desktopcast.dlna.DlnaPlaybackSnapshot
@@ -13,9 +14,12 @@ import com.tcrrry.desktopcast.renderer.AudioConfig
 import com.tcrrry.desktopcast.renderer.NetworkMediaPlayer
 import com.tcrrry.desktopcast.renderer.PlaybackSnapshot
 import com.tcrrry.desktopcast.renderer.VideoRenderer
+import com.tcrrry.desktopcast.safety.DrivingPlaybackInterlock
 import com.tcrrry.desktopcast.session.CastContentKind
 import com.tcrrry.desktopcast.session.CastProtocol
 import com.tcrrry.desktopcast.session.CastSessionCoordinator
+import com.tcrrry.desktopcast.session.CastSessionEndEvent
+import com.tcrrry.desktopcast.session.CastSessionEndReason
 import com.tcrrry.desktopcast.session.CastSessionLease
 import com.tcrrry.desktopcast.session.CastSessionState
 import java.io.InterruptedIOException
@@ -26,6 +30,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Sole owner of the active media session and shared network-video output.
@@ -46,14 +51,27 @@ class CastPlaybackRouter(
     private val networkPlayer = NetworkMediaPlayer(appContext)
     private val dlnaAdapter = DlnaPlaybackAdapter(appContext, scope, this)
     private val airPlayAdapter = AirPlayPlaybackAdapter(appContext, audioManager, this)
+    private val drivingPlaybackInterlock = DrivingPlaybackInterlock()
     private var networkSession: NetworkPlaybackSession? = null
+    private var pendingRemoteDisconnectLease: CastSessionLease? = null
+    private var pendingRemoteDisconnectTask: Runnable? = null
+    private var sessionEndSequence = 0L
 
     private val mutableMediaAspect = MutableStateFlow(16f / 9f)
+    private val mutableSessionEndEvent = MutableStateFlow<CastSessionEndEvent?>(null)
     val mediaAspect: StateFlow<Float> = mutableMediaAspect.asStateFlow()
     val artwork get() = airPlayAdapter.artwork
     val image get() = dlnaAdapter.image
     val mirrorAspect get() = airPlayAdapter.mirrorAspect
     val sessionState: StateFlow<CastSessionState> = coordinator.state
+    val sessionEndEvent: StateFlow<CastSessionEndEvent?> = mutableSessionEndEvent.asStateFlow()
+    private val mediaControlBridge = CastMediaControlBridge(
+        looper = Looper.getMainLooper(),
+        snapshot = { sessionState.value },
+        setPlaying = ::setPlayingFromControls,
+        seekTo = ::seekToPosition,
+    )
+    val mediaControlPlayer: Player get() = mediaControlBridge
     val videoRenderer: VideoRenderer get() = airPlayAdapter.videoRenderer
     val dlnaController: DlnaPlaybackController get() = dlnaAdapter
     val airPlayCallbacks: RaopCallbackHandler get() = airPlayAdapter
@@ -64,6 +82,15 @@ class CastPlaybackRouter(
 
     init {
         configureNetworkPlayer()
+        scope.launch {
+            sessionState.collect { mediaControlBridge.refresh() }
+        }
+    }
+
+    fun beginReceiverLifecycle() = runOnMain {
+        cancelPendingRemoteDisconnect()
+        drivingPlaybackInterlock.beginReceiverLifecycle()
+        mediaControlBridge.refresh()
     }
 
     fun attachAirPlay(handle: Long, audioConfig: AudioConfig) = runOnMain {
@@ -79,6 +106,7 @@ class CastPlaybackRouter(
     fun clearMediaSurface(holder: SurfaceHolder) = networkPlayer.clearSurface(holder)
 
     fun togglePlayback() = runOnMain {
+        if (drivingPlaybackInterlock.isBlocked) return@runOnMain
         when (sessionState.value.protocol) {
             CastProtocol.DLNA -> dlnaAdapter.toggle()
             CastProtocol.AIRPLAY -> airPlayAdapter.toggle()
@@ -87,6 +115,7 @@ class CastPlaybackRouter(
     }
 
     fun seekToPosition(positionMs: Long) = runOnMain {
+        if (drivingPlaybackInterlock.isBlocked) return@runOnMain
         when (sessionState.value.protocol) {
             CastProtocol.DLNA -> dlnaAdapter.seekFromUi(positionMs)
             CastProtocol.AIRPLAY -> airPlayAdapter.seek(positionMs)
@@ -96,12 +125,44 @@ class CastPlaybackRouter(
 
     fun dlnaSnapshot(): DlnaPlaybackSnapshot = dlnaAdapter.snapshot()
 
+    /** Ends only the active sender session while keeping both receiver listeners available. */
+    fun disconnectCurrentSession() = runOnMain {
+        cancelPendingRemoteDisconnect()
+        val protocol = sessionState.value.protocol ?: return@runOnMain
+        when (protocol) {
+            CastProtocol.DLNA -> dlnaAdapter.disconnectFromUi()
+            CastProtocol.AIRPLAY -> airPlayAdapter.disconnectFromUi()
+        }
+        if (sessionState.value.protocol == protocol) {
+            releaseProtocolOutput(protocol)
+            stopNetworkPlayback()
+            coordinator.disconnected(protocol)
+            publishSessionEnd(protocol, CastSessionEndReason.USER_REQUEST)
+        }
+    }
+
+    /** Irreversibly blocks this receiver lifecycle before releasing every output. */
+    fun blockForDrivingSafety() = runOnMain {
+        if (drivingPlaybackInterlock.isBlocked) return@runOnMain
+        cancelPendingRemoteDisconnect()
+        drivingPlaybackInterlock.block()
+        dropAirPlayConnections()
+        dlnaAdapter.releaseOutput(clearMedia = true)
+        notifyDlnaTransportChanged()
+        airPlayAdapter.blockOutputForDrivingSafety()
+        stopNetworkPlayback()
+        mutableMediaAspect.value = 16f / 9f
+        mediaControlBridge.refresh()
+    }
+
     /** Stops outputs while keeping receiver listeners available for a restart. */
     fun stopOutputs() = runOnMain(::stopOutputsInternal)
 
     /** Releases player objects only when the service itself is being destroyed. */
     fun release() = runOnMain {
+        cancelPendingRemoteDisconnect()
         stopOutputsInternal()
+        mediaControlBridge.release()
         networkPlayer.release()
         airPlayAdapter.release()
     }
@@ -109,6 +170,8 @@ class CastPlaybackRouter(
     /** Starts a new external sender or media item; never use this for a callback update. */
     internal fun beginSession(protocol: CastProtocol): CastSessionLease? {
         checkOnMainThread()
+        if (drivingPlaybackInterlock.isBlocked) return null
+        cancelPendingRemoteDisconnect()
         val previousProtocol = sessionState.value.protocol
         val lease = coordinator.beginSession(protocol) ?: return null
         releaseProtocolOutput(previousProtocol)
@@ -119,10 +182,13 @@ class CastPlaybackRouter(
     /** Reuses the current generation for callbacks belonging to the same sender. */
     internal fun ensureSession(protocol: CastProtocol): CastSessionLease? {
         checkOnMainThread()
+        if (drivingPlaybackInterlock.isBlocked) return null
+        cancelPendingRemoteDisconnect()
         return coordinator.leaseFor(protocol) ?: beginSession(protocol)
     }
 
-    internal fun isCurrent(lease: CastSessionLease): Boolean = coordinator.isCurrent(lease)
+    internal fun isCurrent(lease: CastSessionLease): Boolean =
+        !drivingPlaybackInterlock.isBlocked && coordinator.isCurrent(lease)
 
     internal fun showContent(
         lease: CastSessionLease,
@@ -158,10 +224,33 @@ class CastPlaybackRouter(
         coordinator.updateMetadata(lease.protocol, title, detail)
     }
 
-    internal fun disconnect(lease: CastSessionLease) {
+    internal fun disconnectImmediately(lease: CastSessionLease) {
         checkOnMainThread()
         if (!isCurrent(lease)) return
+        cancelPendingRemoteDisconnect()
         coordinator.disconnected(lease.protocol)
+        publishSessionEnd(lease.protocol, CastSessionEndReason.USER_REQUEST)
+    }
+
+    /**
+     * Media end and transport stop are not proof that the sender left. Keep the
+     * logical session alive briefly so a successor item can claim the same
+     * window without causing a fullscreen bounce.
+     */
+    internal fun deferRemoteDisconnect(lease: CastSessionLease) {
+        checkOnMainThread()
+        if (!isCurrent(lease)) return
+        if (pendingRemoteDisconnectLease == lease) return
+        cancelPendingRemoteDisconnect()
+        pendingRemoteDisconnectLease = lease
+        pendingRemoteDisconnectTask = Runnable {
+            if (pendingRemoteDisconnectLease != lease) return@Runnable
+            pendingRemoteDisconnectLease = null
+            pendingRemoteDisconnectTask = null
+            if (!isCurrent(lease)) return@Runnable
+            coordinator.disconnected(lease.protocol)
+            publishSessionEnd(lease.protocol, CastSessionEndReason.REMOTE_DISCONNECTED)
+        }.also { mainHandler.postDelayed(it, REMOTE_DISCONNECT_CONFIRMATION_MS) }
     }
 
     internal fun reportFailure(lease: CastSessionLease, message: String) {
@@ -280,6 +369,16 @@ class CastPlaybackRouter(
         }
     }
 
+    private fun setPlayingFromControls(playing: Boolean) {
+        checkOnMainThread()
+        if (drivingPlaybackInterlock.isBlocked || sessionState.value.playing == playing) return
+        when (sessionState.value.protocol) {
+            CastProtocol.DLNA -> dlnaAdapter.toggle()
+            CastProtocol.AIRPLAY -> airPlayAdapter.toggle()
+            null -> Unit
+        }
+    }
+
     private fun withActiveNetworkObserver(action: (NetworkPlaybackObserver) -> Unit) {
         checkOnMainThread()
         val session = networkSession ?: return
@@ -311,6 +410,7 @@ class CastPlaybackRouter(
 
     private fun stopOutputsInternal() {
         checkOnMainThread()
+        cancelPendingRemoteDisconnect()
         dlnaAdapter.releaseOutput(clearMedia = true)
         airPlayAdapter.stopAll()
         stopNetworkPlayback()
@@ -321,6 +421,17 @@ class CastPlaybackRouter(
         checkOnMainThread()
         networkSession = null
         networkPlayer.stop()
+    }
+
+    private fun cancelPendingRemoteDisconnect() {
+        pendingRemoteDisconnectTask?.let(mainHandler::removeCallbacks)
+        pendingRemoteDisconnectTask = null
+        pendingRemoteDisconnectLease = null
+    }
+
+    private fun publishSessionEnd(protocol: CastProtocol, reason: CastSessionEndReason) {
+        sessionEndSequence += 1
+        mutableSessionEndEvent.value = CastSessionEndEvent(sessionEndSequence, protocol, reason)
     }
 
     private fun checkOnMainThread() {
@@ -336,6 +447,7 @@ class CastPlaybackRouter(
 
     private companion object {
         const val MAIN_COMMAND_TIMEOUT_MS = 2_000L
+        const val REMOTE_DISCONNECT_CONFIRMATION_MS = 2_000L
     }
 }
 

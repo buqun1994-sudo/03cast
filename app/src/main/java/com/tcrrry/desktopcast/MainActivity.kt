@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Bundle
@@ -17,8 +18,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.PopupWindow
-import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -27,11 +28,17 @@ import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.ui.DefaultTimeBar
+import androidx.media3.ui.TimeBar
 import com.tcrrry.desktopcast.databinding.ActivityMainBinding
+import com.tcrrry.desktopcast.safety.DrivingSafetyAlert
+import com.tcrrry.desktopcast.safety.DrivingState
 import com.tcrrry.desktopcast.service.CastService
 import com.tcrrry.desktopcast.session.CastContentKind
 import com.tcrrry.desktopcast.session.CastPhase
 import com.tcrrry.desktopcast.session.CastProtocol
+import com.tcrrry.desktopcast.session.CastSessionEndEvent
+import com.tcrrry.desktopcast.session.CastSessionEndReason
 import com.tcrrry.desktopcast.session.CastSessionState
 import com.tcrrry.desktopcast.window.CastWindowMode
 import com.tcrrry.desktopcast.window.CastWindowNavigator
@@ -56,7 +63,25 @@ open class MainActivity : AppCompatActivity() {
     private var currentMirrorAspect = 16f / 9f
     private var currentMediaAspect = 16f / 9f
     private var controlsOverlay: PopupWindow? = null
+    private var controlsOverlayRequested = false
+    private lateinit var mediaPlayControlGroup: View
+    private lateinit var mediaTimelineGroup: View
+    private lateinit var mediaProgressView: View
     private lateinit var windowNavigator: CastWindowNavigator
+    private var settingsVisible = false
+    private var selectedSettingsSection = SettingsSection.RECEIVER
+    private var lastDrivingSafetyAlert: DrivingSafetyAlert? = null
+    private var drivingSafetyExitHandled = false
+    private var updatingDrivingGuard = false
+    private var returningToStandardForDisconnect = false
+    private var rootBackgroundShowsSettings = false
+    private var lastHandledSessionEndSequence = 0L
+    private var sessionEndEventSource: CastService? = null
+
+    private enum class SettingsSection {
+        RECEIVER,
+        SAFETY,
+    }
 
     private val hideControls = Runnable {
         controlsVisible = false
@@ -68,6 +93,11 @@ open class MainActivity : AppCompatActivity() {
             val service = (binder as CastService.LocalBinder).service
             castService = service
             bound = true
+            binding.mediaControlView.player = service.mediaControlPlayer
+            if (sessionEndEventSource !== service) {
+                sessionEndEventSource = service
+                lastHandledSessionEndSequence = service.sessionEndEvent.value?.sequence ?: 0L
+            }
             windowNavigator.completeHandoffIfRequested(intent)
             attachSurfaces(service)
             collectService(service)
@@ -77,6 +107,7 @@ open class MainActivity : AppCompatActivity() {
         override fun onServiceDisconnected(name: ComponentName) {
             bound = false
             castService = null
+            binding.mediaControlView.player = null
             collectors?.cancel()
             collectors = null
         }
@@ -93,24 +124,31 @@ open class MainActivity : AppCompatActivity() {
             mode = if (isFullscreenWindow) CastWindowMode.FULLSCREEN else CastWindowMode.STANDARD,
             serviceProvider = { castService },
             onFailure = {
+                returningToStandardForDisconnect = false
                 Toast.makeText(this, R.string.fullscreen_switch_failed, Toast.LENGTH_SHORT).show()
             },
         )
+        configureMediaControls()
+        configureAgreementQrCode()
         configureActions()
         configureSurfaces()
         configureBack()
+        renderSettingsSection(selectedSettingsSection)
+        renderDrivingGuard(isDrivingPlaybackGuardEnabled())
+        renderDrivingState(DrivingState.UNAVAILABLE)
         renderState(lastState)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        syncFullscreenControlState()
         windowNavigator.completeHandoffIfRequested(intent)
     }
 
     override fun onStart() {
         super.onStart()
-        showControlsOverlay()
+        syncFullscreenControlState()
         if (!bindingRequested) {
             bindingRequested = bindService(
                 Intent(this, CastService::class.java),
@@ -122,7 +160,9 @@ open class MainActivity : AppCompatActivity() {
 
     override fun onStop() {
         mainHandler.removeCallbacks(hideControls)
+        controlsOverlayRequested = false
         controlsOverlay?.dismiss()
+        binding.mediaControlView.player = null
         collectors?.cancel()
         collectors = null
         if (bindingRequested) {
@@ -136,43 +176,80 @@ open class MainActivity : AppCompatActivity() {
     }
 
     private fun configureActions() {
-        binding.closeButton.setOnClickListener { closeReceiver() }
+        binding.closeButton.setOnClickListener { disconnectCurrentSession() }
         binding.retryButton.setOnClickListener { castService?.retry() }
+        binding.settingsButton.setOnClickListener { openSettings(SettingsSection.RECEIVER) }
+        binding.settingsNavigationReceiver.setOnClickListener {
+            renderSettingsSection(SettingsSection.RECEIVER)
+        }
+        binding.settingsNavigationSafety.setOnClickListener {
+            renderSettingsSection(SettingsSection.SAFETY)
+        }
+        binding.drivingGuardSetting.setOnClickListener {
+            binding.drivingGuardSwitch.performClick()
+        }
+        binding.drivingGuardSwitch.setOnCheckedChangeListener { _, enabled ->
+            if (updatingDrivingGuard) return@setOnCheckedChangeListener
+            if (!enabled) {
+                // The safety guard is opt-out. Revert first, then require an
+                // explicit confirmation inside the car UI before persisting.
+                setDrivingGuardChecked(true)
+                binding.drivingGuardWarning.isVisible = true
+                return@setOnCheckedChangeListener
+            }
+            applyDrivingGuard(enabled = true)
+        }
+        binding.drivingGuardKeepButton.setOnClickListener {
+            binding.drivingGuardWarning.isVisible = false
+            setDrivingGuardChecked(true)
+        }
+        binding.drivingGuardDisableButton.setOnClickListener {
+            binding.drivingGuardWarning.isVisible = false
+            applyDrivingGuard(enabled = false)
+        }
         binding.interactionLayer.setOnClickListener {
             if (controlsVisible) hideControlsNow() else showControls()
         }
-        binding.playPauseButton.setOnClickListener {
-            castService?.togglePlayback()
-            showControls()
-        }
-        binding.fullscreenButton.setOnClickListener {
+    }
+
+    private fun configureMediaControls() {
+        mediaPlayControlGroup = binding.mediaControlView.findViewById(R.id.cast_play_control_group)
+        mediaTimelineGroup = binding.mediaControlView.findViewById(R.id.cast_timeline_group)
+        mediaProgressView = binding.mediaControlView.findViewById(androidx.media3.ui.R.id.exo_progress)
+        binding.mediaControlView.setShowTimeoutMs(0)
+        binding.mediaControlView.setAnimationEnabled(false)
+        syncFullscreenControlState()
+        binding.mediaControlView.setOnFullScreenModeChangedListener {
             windowNavigator.switchMode()
             showControls()
         }
-        binding.playbackSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
-                val target = lastState.durationMs * progress / SEEK_MAX
-                binding.positionText.text = formatTime(target)
-            }
-
-            override fun onStartTrackingTouch(seekBar: SeekBar) {
+        binding.mediaControlView.setOnClickListener {
+            if (controlsVisible) hideControlsNow() else showControls()
+        }
+        (mediaProgressView as DefaultTimeBar).addListener(object : TimeBar.OnScrubListener {
+            override fun onScrubStart(timeBar: TimeBar, position: Long) {
                 seeking = true
                 mainHandler.removeCallbacks(hideControls)
             }
 
-            override fun onStopTrackingTouch(seekBar: SeekBar) {
-                if (lastState.durationMs <= 0L) {
-                    seeking = false
-                    showControls()
-                    return
-                }
-                val target = lastState.durationMs * seekBar.progress / SEEK_MAX
-                castService?.seekTo(target)
+            override fun onScrubMove(timeBar: TimeBar, position: Long) = Unit
+
+            override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
                 seeking = false
                 showControls()
             }
         })
+    }
+
+    /** The standard task is reused after a fullscreen handoff; refresh the icon from the real mode. */
+    private fun syncFullscreenControlState() {
+        binding.mediaControlView.updateIsFullscreen(isFullscreenWindow)
+    }
+
+    private fun configureAgreementQrCode() {
+        binding.drivingGuardAgreementQr.setImageBitmap(
+            TermsQrCodeFactory.create(BuildConfig.TERMS_URL, AGREEMENT_QR_BITMAP_SIZE_PX),
+        )
     }
 
     /**
@@ -186,8 +263,9 @@ open class MainActivity : AppCompatActivity() {
             clipChildren = false
         }
         moveToOverlay(content, binding.interactionLayer)
-        moveToOverlay(content, binding.topControls)
         moveToOverlay(content, binding.mediaControls)
+        moveToOverlay(content, binding.topControls)
+        moveToOverlay(content, binding.safetyOverlay)
         controlsOverlay = PopupWindow(
             content,
             1,
@@ -208,9 +286,13 @@ open class MainActivity : AppCompatActivity() {
 
     private fun showControlsOverlay() {
         val overlay = controlsOverlay ?: return
+        controlsOverlayRequested = true
         if (overlay.isShowing) return
         binding.root.post {
-            if (!isFinishing && !isDestroyed && !overlay.isShowing) {
+            if (controlsOverlayRequested && !isFinishing && !isDestroyed &&
+                lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) &&
+                !overlay.isShowing
+            ) {
                 overlay.width = binding.root.width
                 overlay.height = binding.root.height
                 overlay.showAsDropDown(
@@ -223,10 +305,23 @@ open class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun dismissControlsOverlay() {
+        controlsOverlayRequested = false
+        controlsOverlay?.dismiss()
+    }
+
     private fun configureBack() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (isFullscreenWindow) windowNavigator.switchMode() else closeReceiver()
+                when {
+                    binding.drivingGuardWarning.isVisible -> {
+                        binding.drivingGuardWarning.isVisible = false
+                        setDrivingGuardChecked(true)
+                    }
+                    settingsVisible -> closeSettings()
+                    isFullscreenWindow -> windowNavigator.switchMode()
+                    else -> closeReceiver()
+                }
             }
         })
     }
@@ -276,6 +371,9 @@ open class MainActivity : AppCompatActivity() {
         collectors = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch { service.sessionState.collect(::renderState) }
+                launch { service.sessionEndEvent.collect(::handleSessionEndEvent) }
+                launch { service.drivingState.collect(::renderDrivingState) }
+                launch { service.drivingSafetyAlert.collect(::renderDrivingSafetyAlert) }
                 launch {
                     service.artwork.collect { bitmap ->
                         if (bitmap == null) {
@@ -314,23 +412,31 @@ open class MainActivity : AppCompatActivity() {
         val active = state.phase in ACTIVE_PHASES
         val error = state.phase == CastPhase.RECOVERABLE_ERROR
         val waiting = !active && !error
-        binding.waitingContent.isVisible = waiting
-        binding.errorContent.isVisible = error
-        binding.startProgress.isVisible = state.phase in setOf(CastPhase.STARTING, CastPhase.CONNECTING)
+        val safetyVisible = lastDrivingSafetyAlert != null
+        if (settingsVisible && (active || error || state.phase == CastPhase.CONNECTING)) {
+            settingsVisible = false
+            binding.drivingGuardWarning.isVisible = false
+        }
+        renderRootBackground()
+        binding.settingsContent.isVisible = settingsVisible
+        binding.waitingContent.isVisible = waiting && !settingsVisible && !safetyVisible
+        binding.errorContent.isVisible = error && !settingsVisible && !safetyVisible
+        binding.startProgress.isVisible = !settingsVisible && !safetyVisible &&
+            state.phase in setOf(CastPhase.STARTING, CastPhase.CONNECTING)
         binding.waitingTitle.text = when (state.phase) {
             CastPhase.STARTING, CastPhase.CONNECTING -> getString(R.string.connecting)
             else -> getString(R.string.waiting_title)
         }
-        binding.waitingDeviceName.text = protocolName(state.protocol).ifBlank {
-            getString(R.string.waiting_device_name)
-        }
+        binding.waitingDeviceName.text = getString(R.string.waiting_device_name)
         binding.errorMessage.text = state.detail.ifBlank { getString(R.string.receiver_start_failed) }
 
-        binding.mirrorSurface.isVisible = active && state.content == CastContentKind.MIRROR
-        binding.mediaSurface.isVisible = active && state.content == CastContentKind.NETWORK_VIDEO
-        binding.castImage.isVisible = active && state.content == CastContentKind.IMAGE
-        binding.audioContent.isVisible = active && state.content == CastContentKind.AUDIO
-        binding.interactionLayer.isVisible = active
+        binding.mirrorSurface.isVisible = active && !safetyVisible &&
+            state.content == CastContentKind.MIRROR
+        binding.mediaSurface.isVisible = active && !safetyVisible &&
+            state.content == CastContentKind.NETWORK_VIDEO
+        binding.castImage.isVisible = active && !safetyVisible && state.content == CastContentKind.IMAGE
+        binding.audioContent.isVisible = active && !safetyVisible && state.content == CastContentKind.AUDIO
+        binding.interactionLayer.isVisible = active && !safetyVisible
 
         binding.audioTitle.text = state.title.ifBlank { getString(R.string.unknown_title) }
         binding.audioSubtitle.text = state.detail
@@ -339,48 +445,34 @@ open class MainActivity : AppCompatActivity() {
         binding.mediaTitle.text = state.title
         binding.mediaTitle.isVisible = state.title.isNotBlank()
 
-        val showOverlay = !active || controlsVisible || state.content == CastContentKind.AUDIO
+        val showOverlay = active && !safetyVisible &&
+            (controlsVisible || state.content == CastContentKind.AUDIO)
         binding.topControls.isVisible = showOverlay
-        binding.protocolLabel.isVisible = active
-        binding.topControls.setBackgroundColor(
-            if (active) ContextCompat.getColor(this, R.color.cast_control_scrim_light) else Color.TRANSPARENT,
-        )
+        binding.protocolLabel.isVisible = showOverlay
+        binding.topControls.setBackgroundColor(Color.TRANSPARENT)
 
         val mirrorOrImage = state.content in setOf(CastContentKind.MIRROR, CastContentKind.IMAGE)
-        binding.mediaControls.isVisible = active && showOverlay
-        binding.mediaControls.gravity = if (mirrorOrImage) Gravity.CENTER else Gravity.CENTER_VERTICAL
-        binding.playPauseButton.isVisible = !mirrorOrImage
-        binding.positionText.isVisible = !mirrorOrImage
+        binding.mediaControls.isVisible = showOverlay
+        mediaPlayControlGroup.isVisible = !mirrorOrImage
+        mediaTimelineGroup.isVisible = !mirrorOrImage
         val airPlayAudio = state.protocol == CastProtocol.AIRPLAY &&
             state.content == CastContentKind.AUDIO
-        binding.playbackSeek.isVisible = !mirrorOrImage && !airPlayAudio
-        binding.durationText.isVisible = !mirrorOrImage
+        mediaProgressView.isVisible = !mirrorOrImage && !airPlayAudio
+        if (showOverlay) binding.mediaControlView.show()
 
-        binding.playPauseButton.setImageResource(if (state.playing) R.drawable.ic_pause else R.drawable.ic_play)
-        binding.playPauseButton.contentDescription = getString(if (state.playing) R.string.pause else R.string.play)
-        binding.fullscreenButton.setImageResource(
-            if (isFullscreenWindow) R.drawable.ic_fullscreen_exit else R.drawable.ic_fullscreen,
-        )
-        binding.fullscreenButton.contentDescription = getString(
-            if (isFullscreenWindow) R.string.exit_fullscreen else R.string.enter_fullscreen,
-        )
-        binding.playbackSeek.isEnabled = state.canSeek && !airPlayAudio
-        if (!seeking) {
-            binding.playbackSeek.progress = if (state.durationMs > 0) {
-                ((state.positionMs.coerceIn(0, state.durationMs) * SEEK_MAX) / state.durationMs).toInt()
-            } else {
-                0
-            }
-            binding.positionText.text = formatTime(state.positionMs)
-        }
-        binding.durationText.text = if (airPlayAudio) {
-            " / ${formatTime(state.durationMs)}"
-        } else {
-            formatTime(state.durationMs)
-        }
+        updateControlsOverlayVisibility(active)
 
         if (binding.mirrorSurface.isVisible) fitSurface(binding.mirrorSurface, currentMirrorAspect)
         if (binding.mediaSurface.isVisible) fitSurface(binding.mediaSurface, currentMediaAspect)
+    }
+
+    private fun handleSessionEndEvent(event: CastSessionEndEvent?) {
+        event ?: return
+        if (event.sequence <= lastHandledSessionEndSequence) return
+        lastHandledSessionEndSequence = event.sequence
+        if (isFullscreenWindow && event.reason == CastSessionEndReason.REMOTE_DISCONNECTED) {
+            requestReturnToStandardForDisconnect()
+        }
     }
 
     private fun showControls() {
@@ -435,7 +527,149 @@ open class MainActivity : AppCompatActivity() {
         windowNavigator.cancelPendingHandoff()
         castService?.stopCasting()
         stopService(Intent(this, CastService::class.java))
-        finishAndRemoveTask()
+        windowNavigator.finishAllTasks()
+    }
+
+    private fun disconnectCurrentSession() {
+        castService?.disconnectCurrentSession()
+        if (isFullscreenWindow) {
+            requestReturnToStandardForDisconnect()
+        }
+    }
+
+    private fun requestReturnToStandardForDisconnect() {
+        if (!isFullscreenWindow || returningToStandardForDisconnect) return
+        returningToStandardForDisconnect = true
+        windowNavigator.switchMode()
+    }
+
+    private fun openSettings(section: SettingsSection) {
+        if (lastState.phase in ACTIVE_PHASES) return
+        settingsVisible = true
+        renderSettingsSection(section)
+        renderState(lastState)
+    }
+
+    private fun closeSettings() {
+        binding.drivingGuardWarning.isVisible = false
+        settingsVisible = false
+        renderState(lastState)
+    }
+
+    private fun renderSettingsSection(section: SettingsSection) {
+        selectedSettingsSection = section
+        val receiverSelected = section == SettingsSection.RECEIVER
+        binding.settingsReceiverContent.isVisible = receiverSelected
+        binding.settingsSafetyContent.isVisible = !receiverSelected
+        renderSettingsNavigation(
+            binding.settingsNavigationReceiver,
+            binding.settingsNavigationReceiverIcon,
+            binding.settingsNavigationReceiverLabel,
+            receiverSelected,
+        )
+        renderSettingsNavigation(
+            binding.settingsNavigationSafety,
+            binding.settingsNavigationSafetyIcon,
+            binding.settingsNavigationSafetyLabel,
+            !receiverSelected,
+        )
+        binding.settingsContentScroll.scrollTo(0, 0)
+    }
+
+    private fun renderSettingsNavigation(
+        container: View,
+        icon: ImageView,
+        label: android.widget.TextView,
+        selected: Boolean,
+    ) {
+        if (selected) {
+            container.setBackgroundResource(R.drawable.cast_settings_navigation_selected)
+            container.backgroundTintList = ColorStateList.valueOf(
+                ContextCompat.getColor(this, R.color.cast_accent),
+            )
+            icon.imageTintList = ColorStateList.valueOf(Color.WHITE)
+            label.setTextColor(Color.WHITE)
+        } else {
+            container.background = null
+            container.backgroundTintList = null
+            icon.imageTintList = null
+            label.setTextColor(ContextCompat.getColor(this, R.color.cast_text_primary))
+        }
+        container.isSelected = selected
+    }
+
+    private fun renderDrivingGuard(enabled: Boolean) {
+        setDrivingGuardChecked(enabled)
+        binding.drivingGuardSummary.setText(
+            if (enabled) R.string.settings_driving_guard_summary
+            else R.string.settings_driving_guard_off_summary,
+        )
+    }
+
+    private fun setDrivingGuardChecked(enabled: Boolean) {
+        updatingDrivingGuard = true
+        binding.drivingGuardSwitch.isChecked = enabled
+        updatingDrivingGuard = false
+    }
+
+    private fun applyDrivingGuard(enabled: Boolean) {
+        castService?.setDrivingPlaybackGuardEnabled(enabled)
+            ?: getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(Prefs.DRIVING_PLAYBACK_GUARD, enabled)
+                .apply()
+        renderDrivingGuard(enabled)
+    }
+
+    private fun isDrivingPlaybackGuardEnabled(): Boolean =
+        castService?.isDrivingPlaybackGuardEnabled()
+            ?: getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+                .getBoolean(Prefs.DRIVING_PLAYBACK_GUARD, Prefs.DEF_DRIVING_PLAYBACK_GUARD)
+
+    private fun renderDrivingState(state: DrivingState) {
+        binding.drivingStateValue.setText(
+            when (state) {
+                DrivingState.PARKED -> R.string.settings_driving_state_parked
+                DrivingState.NOT_PARKED -> R.string.settings_driving_state_not_parked
+                DrivingState.UNAVAILABLE -> R.string.settings_driving_state_unavailable
+            },
+        )
+    }
+
+    private fun renderDrivingSafetyAlert(alert: DrivingSafetyAlert?) {
+        lastDrivingSafetyAlert = alert
+        binding.safetyOverlay.isVisible = alert != null
+        if (alert == null) {
+            drivingSafetyExitHandled = false
+        } else {
+            binding.safetyCountdown.text = getString(
+                R.string.driving_safety_countdown,
+                alert.secondsRemaining,
+            )
+            if (alert.exitRequired && !drivingSafetyExitHandled) {
+                drivingSafetyExitHandled = true
+                mainHandler.post { closeReceiver() }
+            }
+        }
+        renderState(lastState)
+    }
+
+    private fun updateControlsOverlayVisibility(active: Boolean) {
+        if (active || lastDrivingSafetyAlert != null) {
+            showControlsOverlay()
+        } else {
+            dismissControlsOverlay()
+        }
+    }
+
+    private fun renderRootBackground() {
+        if (rootBackgroundShowsSettings == settingsVisible) return
+        rootBackgroundShowsSettings = settingsVisible
+        binding.root.background = if (settingsVisible) {
+            ContextCompat.getDrawable(this, android.R.color.transparent)
+        } else {
+            ContextCompat.getDrawable(this, R.drawable.cast_background)
+        }
     }
 
     private fun protocolName(protocol: CastProtocol?): String = when (protocol) {
@@ -444,21 +678,9 @@ open class MainActivity : AppCompatActivity() {
         null -> ""
     }
 
-    private fun formatTime(milliseconds: Long): String {
-        val totalSeconds = milliseconds.coerceAtLeast(0) / 1000
-        val hours = totalSeconds / 3600
-        val minutes = totalSeconds % 3600 / 60
-        val seconds = totalSeconds % 60
-        return if (hours > 0) {
-            "%d:%02d:%02d".format(hours, minutes, seconds)
-        } else {
-            "%d:%02d".format(minutes, seconds)
-        }
-    }
-
     private companion object {
         const val CONTROLS_TIMEOUT_MS = 3_000L
-        const val SEEK_MAX = 1000L
+        const val AGREEMENT_QR_BITMAP_SIZE_PX = 512
         val ACTIVE_PHASES = setOf(
             CastPhase.PLAYING,
             CastPhase.MIRRORING,

@@ -7,6 +7,7 @@ android {
     namespace = "com.tcrrry.desktopcast"
     compileSdk = 36
     ndkVersion = "27.0.12077973"
+    useLibrary("android.car")
 
     defaultConfig {
         applicationId = "com.tcrrry.desktopcast"
@@ -35,11 +36,25 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            buildConfigField("String", "TERMS_ENVIRONMENT", "\"staging\"")
+            buildConfigField(
+                "String",
+                "TERMS_URL",
+                "\"https://staging.9studio.fun/icar03/terms\"",
+            )
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
+            )
+            buildConfigField("String", "TERMS_ENVIRONMENT", "\"production\"")
+            buildConfigField(
+                "String",
+                "TERMS_URL",
+                "\"https://9.9studio.fun/icar03/terms\"",
             )
         }
     }
@@ -54,6 +69,7 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         prefab = true
         viewBinding = true
     }
@@ -82,8 +98,10 @@ dependencies {
     implementation("androidx.media:media:1.7.0")
     implementation("androidx.media3:media3-exoplayer:1.11.0-beta01")
     implementation("androidx.media3:media3-exoplayer-hls:1.11.0-beta01")
+    implementation("androidx.media3:media3-ui:1.11.0-beta01")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.oboe:oboe:1.9.3")
+    implementation("com.google.zxing:core:3.5.3")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

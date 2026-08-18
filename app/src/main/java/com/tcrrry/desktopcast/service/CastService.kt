@@ -15,12 +15,21 @@ import androidx.lifecycle.lifecycleScope
 import com.tcrrry.desktopcast.Prefs
 import com.tcrrry.desktopcast.R
 import com.tcrrry.desktopcast.network.LanAddressMonitor
+import com.tcrrry.desktopcast.safety.DrivingSafetyAlert
+import com.tcrrry.desktopcast.safety.DrivingSafetyPolicy
+import com.tcrrry.desktopcast.safety.DrivingState
+import com.tcrrry.desktopcast.safety.IcarDrivingStateMonitor
 import com.tcrrry.desktopcast.session.CastSessionCoordinator
+import com.tcrrry.desktopcast.session.CastSessionEndEvent
 import com.tcrrry.desktopcast.session.CastSessionState
 import com.tcrrry.desktopcast.window.CastWindowHandoff
 import java.net.Inet4Address
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Android lifecycle and dependency assembly boundary for the receiver.
@@ -35,6 +44,9 @@ class CastService : LifecycleService() {
     private val started = AtomicBoolean(false)
     private val windowHandoff = CastWindowHandoff()
     private var windowHandoffTimeout: Runnable? = null
+    private var safetyCountdown: Runnable? = null
+    private var safetySecondsRemaining = 0
+    private var safetyStateCollector: Job? = null
     private val coordinator = CastSessionCoordinator()
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     private val preferences by lazy { getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE) }
@@ -61,12 +73,26 @@ class CastService : LifecycleService() {
             runOnMain { handleLanAddress(address) }
         }
     }
+    private val mutableDrivingState = MutableStateFlow(DrivingState.UNAVAILABLE)
+    private val mutableDrivingSafetyAlert = MutableStateFlow<DrivingSafetyAlert?>(null)
+    private val drivingStateMonitor by lazy {
+        IcarDrivingStateMonitor(this) { state ->
+            runOnMain {
+                mutableDrivingState.value = state
+                evaluateDrivingSafety()
+            }
+        }
+    }
 
     val sessionState: StateFlow<CastSessionState> get() = playback.sessionState
     val artwork get() = playback.artwork
     val image get() = playback.image
     val mirrorAspect get() = playback.mirrorAspect
     val mediaAspect get() = playback.mediaAspect
+    val mediaControlPlayer get() = playback.mediaControlPlayer
+    val sessionEndEvent: StateFlow<CastSessionEndEvent?> get() = playback.sessionEndEvent
+    val drivingState: StateFlow<DrivingState> = mutableDrivingState.asStateFlow()
+    val drivingSafetyAlert: StateFlow<DrivingSafetyAlert?> = mutableDrivingSafetyAlert.asStateFlow()
 
     inner class LocalBinder : Binder() {
         val service: CastService get() = this@CastService
@@ -90,11 +116,16 @@ class CastService : LifecycleService() {
         // has installed its scope and before the first client binds.
         playback
         runtime
+        safetyStateCollector = lifecycleScope.launch {
+            playback.sessionState.collect { evaluateDrivingSafety() }
+        }
     }
 
     fun startCasting() = runOnMain {
         if (!started.compareAndSet(false, true)) return@runOnMain
+        playback.beginReceiverLifecycle()
         coordinator.beginStart()
+        drivingStateMonitor.start()
         networkMonitor.start()
         handleLanAddress(networkMonitor.currentAddress())
     }
@@ -136,8 +167,16 @@ class CastService : LifecycleService() {
         handleLanAddress(networkMonitor.currentAddress(), force = true)
     }
 
-    fun stopCasting() = runOnMain {
-        if (!started.compareAndSet(true, false)) return@runOnMain
+    fun stopCasting() = stopCasting(clearSafetyAlert = true)
+
+    private fun stopCasting(clearSafetyAlert: Boolean) = runOnMain {
+        if (!started.compareAndSet(true, false)) {
+            if (clearSafetyAlert) cancelDrivingSafetyCountdown()
+            return@runOnMain
+        }
+        cancelDrivingSafetyCountdown(clearSafetyAlert)
+        drivingStateMonitor.stop()
+        mutableDrivingState.value = DrivingState.UNAVAILABLE
         coordinator.stop()
         networkMonitor.stop()
         runtime.stop()
@@ -149,11 +188,25 @@ class CastService : LifecycleService() {
     fun clearMediaSurface(holder: SurfaceHolder) = playback.clearMediaSurface(holder)
     fun togglePlayback() = playback.togglePlayback()
     fun seekTo(positionMs: Long) = playback.seekToPosition(positionMs)
+    fun disconnectCurrentSession() = playback.disconnectCurrentSession()
+    fun isDrivingPlaybackGuardEnabled(): Boolean =
+        preferences.getBoolean(Prefs.DRIVING_PLAYBACK_GUARD, Prefs.DEF_DRIVING_PLAYBACK_GUARD)
+
+    fun setDrivingPlaybackGuardEnabled(enabled: Boolean) = runOnMain {
+        if (mutableDrivingSafetyAlert.value != null) return@runOnMain
+        preferences.edit().putBoolean(Prefs.DRIVING_PLAYBACK_GUARD, enabled).apply()
+        if (enabled) evaluateDrivingSafety() else cancelDrivingSafetyCountdown()
+    }
     fun dlnaSnapshot() = playback.dlnaSnapshot()
 
     override fun onDestroy() {
         windowHandoff.clear()
         clearWindowHandoffTimeout()
+        safetyStateCollector?.cancel()
+        safetyStateCollector = null
+        cancelDrivingSafetyCountdown()
+        drivingStateMonitor.stop()
+        mutableDrivingState.value = DrivingState.UNAVAILABLE
         started.set(false)
         coordinator.stop()
         networkMonitor.stop()
@@ -198,6 +251,46 @@ class CastService : LifecycleService() {
         windowHandoffTimeout = null
     }
 
+    private fun evaluateDrivingSafety() {
+        if (!started.get() || mutableDrivingSafetyAlert.value != null) return
+        if (
+            DrivingSafetyPolicy.shouldBeginExit(
+                protectionEnabled = isDrivingPlaybackGuardEnabled(),
+                drivingState = mutableDrivingState.value,
+                castPhase = playback.sessionState.value.phase,
+            )
+        ) {
+            beginDrivingSafetyExit()
+        }
+    }
+
+    private fun beginDrivingSafetyExit() {
+        if (mutableDrivingSafetyAlert.value != null) return
+        playback.blockForDrivingSafety()
+        safetySecondsRemaining = DRIVING_SAFETY_EXIT_SECONDS
+        mutableDrivingSafetyAlert.value = DrivingSafetyAlert(safetySecondsRemaining)
+        safetyCountdown = object : Runnable {
+            override fun run() {
+                safetySecondsRemaining -= 1
+                if (safetySecondsRemaining <= 0) {
+                    mutableDrivingSafetyAlert.value = DrivingSafetyAlert(0, exitRequired = true)
+                    safetyCountdown = null
+                    stopCasting(clearSafetyAlert = false)
+                } else {
+                    mutableDrivingSafetyAlert.value = DrivingSafetyAlert(safetySecondsRemaining)
+                    mainHandler.postDelayed(this, ONE_SECOND_MS)
+                }
+            }
+        }.also { mainHandler.postDelayed(it, ONE_SECOND_MS) }
+    }
+
+    private fun cancelDrivingSafetyCountdown(clearAlert: Boolean = true) {
+        safetyCountdown?.let(mainHandler::removeCallbacks)
+        safetyCountdown = null
+        safetySecondsRemaining = 0
+        if (clearAlert) mutableDrivingSafetyAlert.value = null
+    }
+
     private fun checkMainThread() {
         check(Looper.myLooper() == Looper.getMainLooper()) {
             "Window handoff must run on the main thread"
@@ -207,5 +300,7 @@ class CastService : LifecycleService() {
     private companion object {
         const val TAG = "CastService"
         const val WINDOW_HANDOFF_TIMEOUT_MS = 3_000L
+        const val DRIVING_SAFETY_EXIT_SECONDS = 5
+        const val ONE_SECOND_MS = 1_000L
     }
 }
