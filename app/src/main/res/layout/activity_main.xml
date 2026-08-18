@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/cast_background"
+    android:keepScreenOn="true">
+
+    <SurfaceView
+        android:id="@+id/mirror_surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        android:visibility="gone" />
+
+    <SurfaceView
+        android:id="@+id/media_surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        android:visibility="gone" />
+
+    <ImageView
+        android:id="@+id/cast_image"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        android:contentDescription="@string/playing"
+        android:scaleType="fitCenter"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/audio_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/cast_page_padding"
+        android:paddingEnd="@dimen/cast_page_padding"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/audio_artwork"
+            android:layout_width="@dimen/cast_artwork_size"
+            android:layout_height="@dimen/cast_artwork_size"
+            android:contentDescription="@string/audio_playing"
+            android:scaleType="centerCrop"
+            android:src="@drawable/ic_cast" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="48dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/audio_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:text="@string/unknown_title"
+                android:textColor="@color/cast_text_primary"
+                android:textSize="@dimen/cast_title_size"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/audio_subtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/cast_text_secondary"
+                android:textSize="@dimen/cast_body_size" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <View
+        android:id="@+id/interaction_layer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/waiting_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="@dimen/cast_page_padding">
+
+        <ImageView
+            android:layout_width="@dimen/cast_icon_large"
+            android:layout_height="@dimen/cast_icon_large"
+            android:contentDescription="@string/waiting_title"
+            android:src="@drawable/ic_cast" />
+
+        <TextView
+            android:id="@+id/waiting_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="40dp"
+            android:text="@string/waiting_title"
+            android:textColor="@color/cast_text_primary"
+            android:textSize="@dimen/cast_status_size"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/waiting_device_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/waiting_device_name"
+            android:textColor="@color/cast_text_secondary"
+            android:textSize="@dimen/cast_body_size" />
+
+        <ProgressBar
+            android:id="@+id/start_progress"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginTop="32dp"
+            android:indeterminateTint="@color/cast_accent" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/error_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="@dimen/cast_page_padding"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/error_message"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:maxWidth="720dp"
+            android:text="@string/receiver_start_failed"
+            android:textColor="@color/cast_text_primary"
+            android:textSize="@dimen/cast_status_size"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/retry_button"
+            android:layout_width="220dp"
+            android:layout_height="72dp"
+            android:layout_marginTop="40dp"
+            android:background="@drawable/retry_button_background"
+            android:text="@string/retry"
+            android:textAllCaps="false"
+            android:textColor="@android:color/white"
+            android:textSize="@dimen/cast_body_size" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/top_controls"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/cast_top_bar_height"
+        android:background="@color/cast_control_scrim_light"
+        android:paddingStart="@dimen/cast_page_padding"
+        android:paddingEnd="28dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="start"
+            android:layout_marginEnd="100dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/protocol_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_name"
+                android:textColor="@color/cast_control_foreground"
+                android:textSize="@dimen/cast_body_size"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/media_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="28dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#BFFFFFFF"
+                android:textSize="@dimen/cast_caption_size" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/close_button"
+            android:layout_width="@dimen/cast_touch_target"
+            android:layout_height="@dimen/cast_touch_target"
+            android:layout_gravity="center_vertical|end"
+            android:background="@drawable/control_button_background"
+            android:contentDescription="@string/close"
+            android:padding="16dp"
+            android:src="@drawable/ic_close" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:id="@+id/media_controls"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/cast_control_bar_height"
+        android:layout_gravity="bottom"
+        android:background="@color/cast_control_scrim"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/cast_page_padding"
+        android:paddingEnd="@dimen/cast_page_padding"
+        android:visibility="gone">
+
+        <ImageButton
+            android:id="@+id/play_pause_button"
+            android:layout_width="@dimen/cast_touch_target"
+            android:layout_height="@dimen/cast_touch_target"
+            android:background="@drawable/control_button_background"
+            android:contentDescription="@string/pause"
+            android:padding="14dp"
+            android:src="@drawable/ic_pause" />
+
+        <TextView
+            android:id="@+id/position_text"
+            android:layout_width="104dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/cast_control_gap"
+            android:gravity="end"
+            android:text="0:00"
+            android:textColor="@color/cast_control_foreground"
+            android:textSize="@dimen/cast_caption_size" />
+
+        <SeekBar
+            android:id="@+id/playback_seek"
+            android:layout_width="0dp"
+            android:layout_height="64dp"
+            android:layout_marginStart="@dimen/cast_control_gap"
+            android:layout_marginEnd="@dimen/cast_control_gap"
+            android:layout_weight="1"
+            android:max="1000"
+            android:progressTint="@color/cast_accent"
+            android:thumbTint="@color/cast_accent" />
+
+        <TextView
+            android:id="@+id/duration_text"
+            android:layout_width="104dp"
+            android:layout_height="wrap_content"
+            android:gravity="start"
+            android:text="0:00"
+            android:textColor="@color/cast_control_foreground"
+            android:textSize="@dimen/cast_caption_size" />
+
+        <ImageButton
+            android:id="@+id/fullscreen_button"
+            android:layout_width="@dimen/cast_touch_target"
+            android:layout_height="@dimen/cast_touch_target"
+            android:layout_marginStart="@dimen/cast_control_gap"
+            android:background="@drawable/control_button_background"
+            android:contentDescription="@string/enter_fullscreen"
+            android:padding="14dp"
+            android:src="@drawable/ic_fullscreen" />
+    </LinearLayout>
+
+</FrameLayout>

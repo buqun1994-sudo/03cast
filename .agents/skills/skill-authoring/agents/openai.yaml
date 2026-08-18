@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skill 创建"
+  short_description: "创建和维护项目级 AI 工作流 skill"
+  default_prompt: "Use $skill-authoring to create or update a project skill with valid metadata and routing."

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">03投屏</string>
+    <string name="waiting_title">等待投屏</string>
+    <string name="waiting_device_name">03投屏</string>
+    <string name="connecting">正在连接</string>
+    <string name="playing">正在播放</string>
+    <string name="mirroring">屏幕镜像</string>
+    <string name="audio_playing">正在播放音频</string>
+    <string name="retry">重试</string>
+    <string name="close">关闭</string>
+    <string name="play">播放</string>
+    <string name="pause">暂停</string>
+    <string name="enter_fullscreen">进入全屏</string>
+    <string name="exit_fullscreen">退出全屏</string>
+    <string name="fullscreen_switch_failed">暂时无法切换窗口</string>
+    <string name="cast_protocol_airplay">AirPlay</string>
+    <string name="cast_protocol_dlna">DLNA</string>
+    <string name="unknown_title">正在投屏</string>
+    <string name="network_unavailable">车机尚未连接局域网</string>
+    <string name="receiver_start_failed">投屏接收启动失败</string>
+    <string name="media_playback_failed">该内容暂时无法播放</string>
+</resources>

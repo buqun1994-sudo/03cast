@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "state": "initialized",
+  "templateName": "new-project-template",
+  "projectName": "03投屏",
+  "projectType": "desktop-client",
+  "description": "Android 9 iCAR 车机上以最简界面稳定接收 DLNA 与 AirPlay 的独立投屏器",
+  "sourceDir": "src",
+  "checkCommand": "node scripts/check-project-ready.mjs",
+  "initializedAt": "2026-08-17T15:28:33.815Z"
+}

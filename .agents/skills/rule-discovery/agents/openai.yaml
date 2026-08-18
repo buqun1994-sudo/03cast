@@ -1,0 +1,4 @@
+interface:
+  display_name: "规则发现"
+  short_description: "沉淀新项目施工中发现的通用规则，并识别需要回流模板源的能力候选"
+  default_prompt: "Use $rule-discovery to summarize reusable rules from this task, place them in the right rule document, and identify anything that should flow back to the local new-project template source."

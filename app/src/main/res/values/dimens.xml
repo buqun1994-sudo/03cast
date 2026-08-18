@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="cast_page_padding">48dp</dimen>
+    <dimen name="cast_top_bar_height">95dp</dimen>
+    <dimen name="cast_touch_target">64dp</dimen>
+    <dimen name="cast_icon_large">112dp</dimen>
+    <dimen name="cast_title_size">36sp</dimen>
+    <dimen name="cast_status_size">31.75sp</dimen>
+    <dimen name="cast_body_size">27.25sp</dimen>
+    <dimen name="cast_caption_size">22.75sp</dimen>
+    <dimen name="cast_control_gap">20dp</dimen>
+    <dimen name="cast_control_bar_height">112dp</dimen>
+    <dimen name="cast_artwork_size">240dp</dimen>
+</resources>

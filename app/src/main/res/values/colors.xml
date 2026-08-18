@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="cast_background">#FFFFFFFF</color>
+    <color name="cast_background_middle">#FFFDFDFD</color>
+    <color name="cast_background_top">#F6FCFBFC</color>
+    <color name="cast_text_primary">#FF000000</color>
+    <color name="cast_text_secondary">#8F000000</color>
+    <color name="cast_accent">#FF5C66BF</color>
+    <color name="cast_control_scrim">#B3000000</color>
+    <color name="cast_control_scrim_light">#66000000</color>
+    <color name="cast_control_foreground">#FFFFFFFF</color>
+    <color name="cast_error">#FFC83C4A</color>
+</resources>

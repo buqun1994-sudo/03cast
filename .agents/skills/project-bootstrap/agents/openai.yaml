@@ -1,0 +1,4 @@
+interface:
+  display_name: "项目初始化"
+  short_description: "将复制后的模板安全转换为真实项目实例"
+  default_prompt: "Use $project-bootstrap to convert this copied template into a concrete project instance before feature work."
