@@ -77,7 +77,7 @@ internal class DlnaPlaybackAdapter(
     override fun stop() = host.runOnMainBlocking {
         val activeLease = activeLease() ?: return@runOnMainBlocking
         releaseOutput(clearMedia = false)
-        host.deferRemoteDisconnect(activeLease)
+        host.disconnectRemoteImmediately(activeLease)
     }
 
     override fun seekTo(positionMs: Long) = host.runOnMainBlocking {
@@ -175,7 +175,7 @@ internal class DlnaPlaybackAdapter(
         host.stopNetworkPlayback(activeLease)
         state = state.copy(transportState = DlnaTransportState.STOPPED)
         lease = null
-        host.deferRemoteDisconnect(activeLease)
+        host.disconnectRemoteImmediately(activeLease)
         host.notifyDlnaTransportChanged()
     }
 

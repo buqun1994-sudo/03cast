@@ -36,8 +36,6 @@ import com.tcrrry.desktopcast.service.CastService
 import com.tcrrry.desktopcast.session.CastContentKind
 import com.tcrrry.desktopcast.session.CastPhase
 import com.tcrrry.desktopcast.session.CastProtocol
-import com.tcrrry.desktopcast.session.CastSessionEndEvent
-import com.tcrrry.desktopcast.session.CastSessionEndReason
 import com.tcrrry.desktopcast.session.CastSessionState
 import com.tcrrry.desktopcast.window.CastWindowMode
 import com.tcrrry.desktopcast.window.CastWindowNavigator
@@ -72,10 +70,8 @@ open class MainActivity : AppCompatActivity() {
     private var lastDrivingSafetyAlert: DrivingSafetyAlert? = null
     private var drivingSafetyExitHandled = false
     private var updatingDrivingGuard = false
-    private var returningToStandardForDisconnect = false
+    private var returningToStandard = false
     private var rootBackgroundShowsSettings = false
-    private var lastHandledSessionEndSequence = 0L
-    private var sessionEndEventSource: CastService? = null
 
     private enum class SettingsSection {
         RECEIVER,
@@ -93,10 +89,6 @@ open class MainActivity : AppCompatActivity() {
             castService = service
             bound = true
             binding.mediaControlView.player = service.mediaControlPlayer
-            if (sessionEndEventSource !== service) {
-                sessionEndEventSource = service
-                lastHandledSessionEndSequence = service.sessionEndEvent.value?.sequence ?: 0L
-            }
             windowNavigator.completeHandoffIfRequested(intent)
             attachSurfaces(service)
             collectService(service)
@@ -123,7 +115,7 @@ open class MainActivity : AppCompatActivity() {
             mode = if (isFullscreenWindow) CastWindowMode.FULLSCREEN else CastWindowMode.STANDARD,
             serviceProvider = { castService },
             onFailure = {
-                returningToStandardForDisconnect = false
+                returningToStandard = false
                 Toast.makeText(this, R.string.fullscreen_switch_failed, Toast.LENGTH_SHORT).show()
             },
         )
@@ -182,6 +174,9 @@ open class MainActivity : AppCompatActivity() {
 
     private fun configureActions() {
         binding.closeButton.setOnClickListener { disconnectCurrentSession() }
+        binding.waitingFullscreenExitButton.setOnClickListener {
+            if (isFullscreenWindow) windowNavigator.switchMode()
+        }
         binding.retryButton.setOnClickListener { castService?.retry() }
         binding.settingsButton.setOnClickListener { openSettings(SettingsSection.RECEIVER) }
         binding.settingsNavigationReceiver.setOnClickListener {
@@ -394,7 +389,6 @@ open class MainActivity : AppCompatActivity() {
         collectors = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch { service.sessionState.collect(::renderState) }
-                launch { service.sessionEndEvent.collect(::handleSessionEndEvent) }
                 launch { service.drivingState.collect(::renderDrivingState) }
                 launch { service.drivingSafetyAlert.collect(::renderDrivingSafetyAlert) }
                 launch {
@@ -444,6 +438,8 @@ open class MainActivity : AppCompatActivity() {
         binding.settingsContent.isVisible = settingsVisible
         binding.waitingContent.isVisible = waiting && !settingsVisible && !safetyVisible
         binding.errorContent.isVisible = error && !settingsVisible && !safetyVisible
+        binding.waitingFullscreenExitButton.isVisible = isFullscreenWindow &&
+            state.phase == CastPhase.WAITING && !settingsVisible && !safetyVisible
         binding.startProgress.isVisible = !settingsVisible && !safetyVisible &&
             state.phase in setOf(CastPhase.STARTING, CastPhase.CONNECTING)
         binding.waitingTitle.text = when (state.phase) {
@@ -486,15 +482,6 @@ open class MainActivity : AppCompatActivity() {
         updateControlsOverlayVisibility(active)
 
         refitVisibleSurfaces()
-    }
-
-    private fun handleSessionEndEvent(event: CastSessionEndEvent?) {
-        event ?: return
-        if (event.sequence <= lastHandledSessionEndSequence) return
-        lastHandledSessionEndSequence = event.sequence
-        if (isFullscreenWindow && event.reason == CastSessionEndReason.REMOTE_DISCONNECTED) {
-            requestReturnToStandardForDisconnect()
-        }
     }
 
     private fun showControls() {
@@ -560,13 +547,13 @@ open class MainActivity : AppCompatActivity() {
     private fun disconnectCurrentSession() {
         castService?.disconnectCurrentSession()
         if (isFullscreenWindow) {
-            requestReturnToStandardForDisconnect()
+            requestReturnToStandardWindow()
         }
     }
 
-    private fun requestReturnToStandardForDisconnect() {
-        if (!isFullscreenWindow || returningToStandardForDisconnect) return
-        returningToStandardForDisconnect = true
+    private fun requestReturnToStandardWindow() {
+        if (!isFullscreenWindow || returningToStandard) return
+        returningToStandard = true
         windowNavigator.switchMode()
     }
 

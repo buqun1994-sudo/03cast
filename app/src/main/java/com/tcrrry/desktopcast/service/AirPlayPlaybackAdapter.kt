@@ -117,16 +117,19 @@ internal class AirPlayPlaybackAdapter(
         host.disconnectImmediately(activeLease)
     }
 
-    fun releaseOutput() {
+    fun releaseOutput(
+        restoreMirrorSurfaceGeometry: Boolean = true,
+        resetMirrorAspect: Boolean = true,
+    ) {
         cancelPendingTransportDestroy()
         lease?.let(host::stopNetworkPlayback)
         mirrorActive = false
         mirrorStreamToken = 0L
         audioActive = false
         playing = true
-        videoRenderer.reset()
+        videoRenderer.reset(restoreSurfaceGeometry = restoreMirrorSurfaceGeometry)
         audioRenderer.stop()
-        mutableMirrorAspect.value = DEFAULT_MIRROR_ASPECT
+        if (resetMirrorAspect) mutableMirrorAspect.value = DEFAULT_MIRROR_ASPECT
         mutableArtwork.value = null
         title = ""
         detail = ""
@@ -246,13 +249,16 @@ internal class AirPlayPlaybackAdapter(
         }
         mirrorActive = false
         mirrorStreamToken = 0L
-        videoRenderer.reset()
-        mutableMirrorAspect.value = DEFAULT_MIRROR_ASPECT
         if (audioActive) {
             host.showContent(activeLease, CastContentKind.AUDIO, title, detail, playing)
+            videoRenderer.reset(restoreSurfaceGeometry = false)
+            mutableMirrorAspect.value = DEFAULT_MIRROR_ASPECT
         } else {
-            releaseOutput()
-            host.deferRemoteDisconnect(activeLease)
+            host.disconnectRemoteImmediately(activeLease)
+            releaseOutput(
+                restoreMirrorSurfaceGeometry = false,
+                resetMirrorAspect = false,
+            )
         }
         Log.i(TAG, "AirPlay mirror transport stopped")
     }
@@ -310,7 +316,7 @@ internal class AirPlayPlaybackAdapter(
         if (!mirrorActive && !host.isNetworkPlaybackActive(activeLease)) {
             mirrorStreamToken = 0L
             releaseOutput()
-            host.deferRemoteDisconnect(activeLease)
+            host.disconnectRemoteImmediately(activeLease)
         } else if (!mirrorActive) {
             host.updatePlayback(
                 activeLease,
@@ -342,8 +348,11 @@ internal class AirPlayPlaybackAdapter(
                 pendingTransportDestroy = null
                 val activeLease = activeLease() ?: return@Runnable
                 if (mirrorActive || audioActive || host.isNetworkPlaybackActive(activeLease)) return@Runnable
-                releaseOutput()
-                host.deferRemoteDisconnect(activeLease)
+                host.disconnectRemoteImmediately(activeLease)
+                releaseOutput(
+                    restoreMirrorSurfaceGeometry = false,
+                    resetMirrorAspect = false,
+                )
             }
             pendingTransportDestroy = task
             mainHandler.postDelayed(task, TRANSPORT_DESTROY_CONFIRMATION_MS)
@@ -419,7 +428,7 @@ internal class AirPlayPlaybackAdapter(
         host.stopNetworkPlayback(activeLease)
         mirrorStreamToken = 0L
         lease = null
-        host.deferRemoteDisconnect(activeLease)
+        host.disconnectRemoteImmediately(activeLease)
     }
 
     override fun onVideoSessionPoll() = host.runOnMain {
@@ -467,7 +476,7 @@ internal class AirPlayPlaybackAdapter(
         host.stopNetworkPlayback(activeLease)
         mirrorStreamToken = 0L
         lease = null
-        host.deferRemoteDisconnect(activeLease)
+        host.disconnectRemoteImmediately(activeLease)
     }
 
     override fun onError(message: String) {

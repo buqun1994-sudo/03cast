@@ -151,6 +151,20 @@
             android:textAllCaps="false"
             android:textColor="@color/cast_accent"
             android:textSize="@dimen/cast_body_size" />
+
+        <ImageButton
+            android:id="@+id/waiting_fullscreen_exit_button"
+            android:layout_width="@dimen/cast_media_secondary_control_size"
+            android:layout_height="@dimen/cast_media_secondary_control_size"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="24dp"
+            android:layout_marginEnd="32dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="@string/exit_fullscreen"
+            android:padding="@dimen/cast_media_secondary_icon_padding"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_fullscreen_exit"
+            android:visibility="gone" />
     </FrameLayout>
 
     <LinearLayout

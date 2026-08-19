@@ -585,9 +585,22 @@ class VideoRenderer {
         }
     }
 
-    fun reset() = synchronized(lock) {
+    /**
+     * Clears decoder state. Remote output teardown can skip restoring layout
+     * geometry because the mirror SurfaceView is hidden by the session state
+     * before the next stream claims it; full surface destruction still uses the
+     * default layout restoration path.
+     */
+    fun reset(restoreSurfaceGeometry: Boolean = true) = synchronized(lock) {
         stopCodec()
-        resetSurfaceBufferGeometry()
+        if (restoreSurfaceGeometry) {
+            resetSurfaceBufferGeometry()
+        } else {
+            requestedBufferWidth = 0
+            requestedBufferHeight = 0
+            bufferGeometryReady = false
+            bufferGeometryRequestPending = false
+        }
         pendingKeyframe = null
         videoWidth = 0
         videoHeight = 0

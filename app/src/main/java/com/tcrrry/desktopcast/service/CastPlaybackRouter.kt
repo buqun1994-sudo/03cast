@@ -53,8 +53,6 @@ class CastPlaybackRouter(
     private val airPlayAdapter = AirPlayPlaybackAdapter(appContext, audioManager, this)
     private val drivingPlaybackInterlock = DrivingPlaybackInterlock()
     private var networkSession: NetworkPlaybackSession? = null
-    private var pendingRemoteDisconnectLease: CastSessionLease? = null
-    private var pendingRemoteDisconnectTask: Runnable? = null
     private var sessionEndSequence = 0L
 
     private val mutableMediaAspect = MutableStateFlow(16f / 9f)
@@ -88,7 +86,6 @@ class CastPlaybackRouter(
     }
 
     fun beginReceiverLifecycle() = runOnMain {
-        cancelPendingRemoteDisconnect()
         drivingPlaybackInterlock.beginReceiverLifecycle()
         mediaControlBridge.refresh()
     }
@@ -131,7 +128,6 @@ class CastPlaybackRouter(
 
     /** Ends only the active sender session while keeping both receiver listeners available. */
     fun disconnectCurrentSession() = runOnMain {
-        cancelPendingRemoteDisconnect()
         val protocol = sessionState.value.protocol ?: return@runOnMain
         when (protocol) {
             CastProtocol.DLNA -> dlnaAdapter.disconnectFromUi()
@@ -148,7 +144,6 @@ class CastPlaybackRouter(
     /** Irreversibly blocks this receiver lifecycle before releasing every output. */
     fun blockForDrivingSafety() = runOnMain {
         if (drivingPlaybackInterlock.isBlocked) return@runOnMain
-        cancelPendingRemoteDisconnect()
         drivingPlaybackInterlock.block()
         dropAirPlayConnections()
         dlnaAdapter.releaseOutput(clearMedia = true)
@@ -164,7 +159,6 @@ class CastPlaybackRouter(
 
     /** Releases player objects only when the service itself is being destroyed. */
     fun release() = runOnMain {
-        cancelPendingRemoteDisconnect()
         stopOutputsInternal()
         mediaControlBridge.release()
         networkPlayer.release()
@@ -175,7 +169,6 @@ class CastPlaybackRouter(
     internal fun beginSession(protocol: CastProtocol): CastSessionLease? {
         checkOnMainThread()
         if (drivingPlaybackInterlock.isBlocked) return null
-        cancelPendingRemoteDisconnect()
         val previousProtocol = sessionState.value.protocol
         val lease = coordinator.beginSession(protocol) ?: return null
         releaseProtocolOutput(previousProtocol)
@@ -193,7 +186,6 @@ class CastPlaybackRouter(
     internal fun beginAirPlayMirrorSession(preserveAudio: Boolean): CastSessionLease? {
         checkOnMainThread()
         if (drivingPlaybackInterlock.isBlocked) return null
-        cancelPendingRemoteDisconnect()
         if (preserveAudio &&
             sessionState.value.protocol == CastProtocol.AIRPLAY &&
             sessionState.value.content == CastContentKind.AUDIO
@@ -213,7 +205,6 @@ class CastPlaybackRouter(
     internal fun ensureSession(protocol: CastProtocol): CastSessionLease? {
         checkOnMainThread()
         if (drivingPlaybackInterlock.isBlocked) return null
-        cancelPendingRemoteDisconnect()
         return coordinator.leaseFor(protocol) ?: beginSession(protocol)
     }
 
@@ -257,30 +248,16 @@ class CastPlaybackRouter(
     internal fun disconnectImmediately(lease: CastSessionLease) {
         checkOnMainThread()
         if (!isCurrent(lease)) return
-        cancelPendingRemoteDisconnect()
         coordinator.disconnected(lease.protocol)
         publishSessionEnd(lease.protocol, CastSessionEndReason.USER_REQUEST)
     }
 
-    /**
-     * Media end and transport stop are not proof that the sender left. Keep the
-     * logical session alive briefly so a successor item can claim the same
-     * window without causing a fullscreen bounce.
-     */
-    internal fun deferRemoteDisconnect(lease: CastSessionLease) {
+    /** Ends a remote session immediately without changing the current window mode. */
+    internal fun disconnectRemoteImmediately(lease: CastSessionLease) {
         checkOnMainThread()
         if (!isCurrent(lease)) return
-        if (pendingRemoteDisconnectLease == lease) return
-        cancelPendingRemoteDisconnect()
-        pendingRemoteDisconnectLease = lease
-        pendingRemoteDisconnectTask = Runnable {
-            if (pendingRemoteDisconnectLease != lease) return@Runnable
-            pendingRemoteDisconnectLease = null
-            pendingRemoteDisconnectTask = null
-            if (!isCurrent(lease)) return@Runnable
-            coordinator.disconnected(lease.protocol)
-            publishSessionEnd(lease.protocol, CastSessionEndReason.REMOTE_DISCONNECTED)
-        }.also { mainHandler.postDelayed(it, REMOTE_DISCONNECT_CONFIRMATION_MS) }
+        coordinator.disconnected(lease.protocol)
+        publishSessionEnd(lease.protocol, CastSessionEndReason.REMOTE_DISCONNECTED)
     }
 
     internal fun reportFailure(lease: CastSessionLease, message: String) {
@@ -442,7 +419,6 @@ class CastPlaybackRouter(
 
     private fun stopOutputsInternal() {
         checkOnMainThread()
-        cancelPendingRemoteDisconnect()
         dlnaAdapter.releaseOutput(clearMedia = true)
         airPlayAdapter.stopAll()
         stopNetworkPlayback()
@@ -453,12 +429,6 @@ class CastPlaybackRouter(
         checkOnMainThread()
         networkSession = null
         networkPlayer.stop()
-    }
-
-    private fun cancelPendingRemoteDisconnect() {
-        pendingRemoteDisconnectTask?.let(mainHandler::removeCallbacks)
-        pendingRemoteDisconnectTask = null
-        pendingRemoteDisconnectLease = null
     }
 
     private fun publishSessionEnd(protocol: CastProtocol, reason: CastSessionEndReason) {
@@ -479,7 +449,6 @@ class CastPlaybackRouter(
 
     private companion object {
         const val MAIN_COMMAND_TIMEOUT_MS = 2_000L
-        const val REMOTE_DISCONNECT_CONFIRMATION_MS = 2_000L
     }
 }
 
