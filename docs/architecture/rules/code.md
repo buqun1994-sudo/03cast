@@ -44,11 +44,13 @@
 
 1. 触发条件：车机需要在标准自由窗口和全屏任务之间切换，且媒体服务不能因来源 Activity 的 `onStop` 被误停。
 2. Activity 只能通过 `CastWindowNavigator` 发起切换；Navigator 负责公开 `Intent`、`ActivityOptions.setLaunchBounds`、任务 flag 和失败恢复，服务只负责在交接期间维持媒体生命周期。
-3. 每次交接必须生成唯一令牌并写入目标 intent；目标只能完成同令牌交接，迟到 intent、旧超时和旧取消不得影响更新的交接。
-4. 来源 Activity 的 `onStop` 只消费一次自己发起的交接，不把“当前是否有任意交接”当作停止条件；三秒未完成时服务停止接收并释放资源。
-5. 验证方式：纯策略单测覆盖方向、复用目标任务、结束来源任务和令牌过期；窗口边界、播放连续性、端口持续监听及失败后原窗口恢复由用户按手测用例确认，AI 不默认执行交互 smoke。
-6. 全屏窗口进入 `onStart` 后必须发现并绑定版本 `1` 的 `ACQUIRE_FULL_DISPLAY_OCCUPANCY_LEASE` provider，`onStop` / `onDestroy` 必须幂等释放；绑定本身是歌词避让状态，不携带播放器、媒体或窗口控制 Binder 方法，也不写死接收应用包名。
-7. 适用边界：仅适用于本项目的标准浮窗 / 全屏双任务模型；不引入车厂私有窗口接口，不推广到画中画或多窗口编排。
+3. 每次交接必须生成唯一令牌并写入目标 intent；目标只能完成同令牌交接，迟到 intent、旧超时和旧取消不得影响更新的交接。令牌只表达“媒体生命周期正在跨窗口交接”，不得携带来源任务身份，也不得让服务成为第二个窗口导航器。
+4. 标准窗口进入全屏时，来源标准任务先退到后台并保留；全屏返回时以 `REORDER_TO_FRONT` 复用标准任务，目标启动调用成功后由全屏来源 Activity 调用 `finish()` 结束自己。禁止由目标 Activity 或服务扫描 `ActivityManager.appTasks / RecentTaskInfo` 来寻找来源任务。
+5. 目标启动和来源结束必须使用两个错误边界。目标启动失败时取消令牌并恢复仍存活的来源窗口；目标已经成功提交后，来源结束失败只记录诊断，不能调用失败 UI、不能停止媒体，也不能向用户显示切换失败 Toast。
+6. 来源 Activity 的 `onStop` 只消费一次自己发起的交接，不把“当前是否有任意交接”当作停止条件。服务未绑定时窗口切换控件必须不可用，不排队旧点击；三秒未确认时服务只停止接收并释放令牌，不启动、移动或回收 Activity 任务。
+7. 验证方式：纯策略单测覆盖方向、目标复用、令牌过期，以及“目标启动失败不结束来源 / 来源结束失败不否定目标启动”两个错误边界；`lintDebug` 的 `NewApi` 检查不得在窗口主链出现 API 28 以上调用。窗口边界、点击响应、播放连续性和端口持续监听由用户按手测用例确认，AI 不默认执行交互 smoke。
+8. 全屏窗口进入 `onStart` 后必须发现并绑定版本 `1` 的 `ACQUIRE_FULL_DISPLAY_OCCUPANCY_LEASE` provider，`onStop` / `onDestroy` 必须幂等释放；绑定本身是歌词避让状态，不携带播放器、媒体或窗口控制 Binder 方法，也不写死接收应用包名。
+9. 适用边界：仅适用于本项目的标准浮窗 / 全屏双任务模型；不引入车厂私有窗口接口，不推广到画中画或多窗口编排。
 
 ## 6. 项目代码约束
 
@@ -76,3 +78,10 @@
 6. DLNA XML 层保留发送端 `protocolInfo` 原文；播放器边界统一解析高置信 MIME（含 HLS），对 DLNA 的未知 progressive extractor 失败最多执行一次 HLS 重试，第二次失败必须保留可观测错误并交给现有错误状态机。
 7. 验证方式：`VideoDecodePolicyTest`、`MediaMimeResolverTest` 与直接相关 DLNA SOAP 测试通过，Debug 构建和原生编译通过；日志应能看到显示配置、解码候选快照、实际 codec 名称、RTP 源 / 编码尺寸和 Media3 实际 MIME。真实 Mac 扩展显示、分辨率切换、全屏交接和 Apple 设备跨会话恢复仍由用户在目标设备验收。
 8. 适用边界：当前目标固定为 `S56_HQX`、Android 9、`1920x1080`；该规则不宣称绕过 DRM、不引入转码服务器，也不允许在缺乏发送端证据时修改 AirPlay 型号或 feature bits。
+
+## 9. Android 平台 API 兼容规则
+
+1. 触发条件：新增或修改 Android Framework 字段、方法、类、常量或系统服务调用，且工程 `compileSdk` 高于 `minSdk`。
+2. 应采取动作：`compileSdk` 只代表编译时可见性，不代表目标系统运行时存在。每个新增平台符号都必须核对首次 API 等级；高于 `minSdk` 时只能放在明确的版本分支内，或改用目标系统已有的公开契约。禁止依赖编译成功、JVM 单测或厂商实现碰巧存在来推定兼容。
+3. 验证方式：相关代码必须执行 Android Lint `NewApi` 检查，并在最低版本真机故障诊断时优先检查 `NoSuchFieldError / NoSuchMethodError / VerifyError`。本项目窗口主链只允许 API 28 及以下的公开符号。
+4. 适用边界：该规则适用于 Kotlin / Java 对 Android Framework 的直接调用；第三方 native ABI、反射兼容和可选系统库需要各自独立的版本门禁，不能由本规则替代。

@@ -13,7 +13,7 @@ class CastWindowPolicyTest {
         assertEquals(CastWindowMode.FULLSCREEN, transition.target)
         assertTrue(transition.moveSourceTaskToBack)
         assertFalse(transition.reuseTargetTask)
-        assertFalse(transition.finishSourceTask)
+        assertFalse(transition.retireSourceAfterLaunch)
     }
 
     @Test
@@ -23,6 +23,47 @@ class CastWindowPolicyTest {
         assertEquals(CastWindowMode.STANDARD, transition.target)
         assertFalse(transition.moveSourceTaskToBack)
         assertTrue(transition.reuseTargetTask)
-        assertTrue(transition.finishSourceTask)
+        assertTrue(transition.retireSourceAfterLaunch)
+    }
+
+    @Test
+    fun targetLaunchFailureDoesNotRetireSource() {
+        var sourceRetired = false
+        var targetFailureReported = false
+        var retirementFailureReported = false
+
+        val launched = executeWindowTransition(
+            launchTarget = { throw IllegalStateException("launch rejected") },
+            retireSource = { sourceRetired = true },
+            onTargetLaunchFailure = { targetFailureReported = true },
+            onSourceRetirementFailure = { retirementFailureReported = true },
+        )
+
+        assertFalse(launched)
+        assertFalse(sourceRetired)
+        assertTrue(targetFailureReported)
+        assertFalse(retirementFailureReported)
+    }
+
+    @Test
+    fun sourceRetirementFailureDoesNotInvalidateAcceptedTarget() {
+        val events = mutableListOf<String>()
+        var targetFailureReported = false
+        var retirementFailureReported = false
+
+        val launched = executeWindowTransition(
+            launchTarget = { events += "launch" },
+            retireSource = {
+                events += "retire"
+                throw IllegalStateException("retirement rejected")
+            },
+            onTargetLaunchFailure = { targetFailureReported = true },
+            onSourceRetirementFailure = { retirementFailureReported = true },
+        )
+
+        assertTrue(launched)
+        assertEquals(listOf("launch", "retire"), events)
+        assertFalse(targetFailureReported)
+        assertTrue(retirementFailureReported)
     }
 }

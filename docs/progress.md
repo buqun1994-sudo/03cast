@@ -40,3 +40,11 @@
 3. 已完成：Media3 `PlayerControlView` 控制桥、透明控制层、置顶 `SurfaceView` 主链和安全播放锁；未引入悬浮窗权限、无障碍服务或后台常驻。
 4. 已验证：`CastSessionCoordinatorTest`、`DrivingSafetyPolicyTest`、`assembleDebug`、`bash -n scripts/install-debug-to-device.sh` 和 `git diff --check` 通过；Debug APK 已通过目标型号筛选覆盖安装到 `S56_HQX`，未启动应用。
 5. 待用户手测：设置页白条返回、全屏返回后的图标、短视频自动下一条保持当前窗口、真实断开保持当前窗口、全屏等待态退出全屏、活动态关闭回等待，以及真实 DLNA / AirPlay 兼容性。HDR、AirPlay URL/HLS、镜像和不同 DLNA 媒体比例仍未完成专项验收。
+
+## 2026-08-20 全屏交接失败复盘与修复
+
+1. 已定位：上一版把来源任务身份传入目标 Activity 和服务，再通过 `RecentTaskInfo.taskId` 扫描任务；该字段从 API 29 才存在，Android 9 真机在全屏返回浮窗时连续触发 `NoSuchFieldError` 并终止主进程。跨任务确认和服务未绑定排队同时扩大了窗口交接主链，用户确认浮窗进入全屏的响应明显变慢。
+2. 已修复：恢复来源 Activity 主导的同步公开任务切换；服务只持有三秒媒体交接令牌，不再识别、扫描或恢复任务。全屏目标提交成功后来源 Activity 只调用 `finishAndRemoveTask()` 结束自身，目标启动与来源结束使用独立失败边界，移除切换失败 Toast 和未绑定请求排队。
+3. 已补充：窗口控件只在服务绑定完成且没有进行中交接时可用；策略单测覆盖“目标启动失败不结束来源”和“来源结束失败不否定已接受目标”，Android 平台规则补充 `compileSdk` 与 `minSdk` 的运行时兼容门禁。
+4. 已验证：`testDebugUnitTest`、`assembleDebug`、`node scripts/check-project-ready.mjs`、`node scripts/check-skills.mjs`、`bash -n scripts/install-debug-to-device.sh` 和 `git diff --check` 通过；`lintDebug` 已确认本轮窗口代码无 `NewApi`，但仓库既有 Media3 opt-in lint 仍使全任务失败；Debug APK 已通过 `--install-only` 覆盖安装到 `S56_HQX`，未启动应用。
+5. 用户已手测通过：浮窗 -> 全屏响应速度恢复；全屏 -> 浮窗不崩溃、不隐藏应用、不出现切换失败提示，播放位置、广播和全屏图标保持正确。

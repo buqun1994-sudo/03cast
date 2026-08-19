@@ -19,7 +19,6 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.PopupWindow
-import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -64,13 +63,13 @@ open class MainActivity : AppCompatActivity() {
     private lateinit var mediaPlayControlGroup: View
     private lateinit var mediaTimelineGroup: View
     private lateinit var mediaProgressView: View
+    private lateinit var mediaFullscreenControl: View
     private lateinit var windowNavigator: CastWindowNavigator
     private var settingsVisible = false
     private var selectedSettingsSection = SettingsSection.RECEIVER
     private var lastDrivingSafetyAlert: DrivingSafetyAlert? = null
     private var drivingSafetyExitHandled = false
     private var updatingDrivingGuard = false
-    private var returningToStandard = false
     private var rootBackgroundShowsSettings = false
 
     private enum class SettingsSection {
@@ -93,6 +92,7 @@ open class MainActivity : AppCompatActivity() {
             attachSurfaces(service)
             collectService(service)
             service.startCasting()
+            renderState(lastState)
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -101,6 +101,7 @@ open class MainActivity : AppCompatActivity() {
             binding.mediaControlView.player = null
             collectors?.cancel()
             collectors = null
+            renderState(lastState)
         }
     }
 
@@ -115,8 +116,8 @@ open class MainActivity : AppCompatActivity() {
             mode = if (isFullscreenWindow) CastWindowMode.FULLSCREEN else CastWindowMode.STANDARD,
             serviceProvider = { castService },
             onFailure = {
-                returningToStandard = false
-                Toast.makeText(this, R.string.fullscreen_switch_failed, Toast.LENGTH_SHORT).show()
+                syncFullscreenControlState()
+                renderState(lastState)
             },
         )
         configureMediaControls()
@@ -175,7 +176,7 @@ open class MainActivity : AppCompatActivity() {
     private fun configureActions() {
         binding.closeButton.setOnClickListener { disconnectCurrentSession() }
         binding.waitingFullscreenExitButton.setOnClickListener {
-            if (isFullscreenWindow) windowNavigator.switchMode()
+            if (isFullscreenWindow) requestWindowSwitch()
         }
         binding.retryButton.setOnClickListener { castService?.retry() }
         binding.settingsButton.setOnClickListener { openSettings(SettingsSection.RECEIVER) }
@@ -216,11 +217,13 @@ open class MainActivity : AppCompatActivity() {
         mediaPlayControlGroup = binding.mediaControlView.findViewById(R.id.cast_play_control_group)
         mediaTimelineGroup = binding.mediaControlView.findViewById(R.id.cast_timeline_group)
         mediaProgressView = binding.mediaControlView.findViewById(androidx.media3.ui.R.id.exo_progress)
+        mediaFullscreenControl =
+            binding.mediaControlView.findViewById(androidx.media3.ui.R.id.exo_fullscreen)
         binding.mediaControlView.setShowTimeoutMs(0)
         binding.mediaControlView.setAnimationEnabled(false)
         syncFullscreenControlState()
         binding.mediaControlView.setOnFullScreenModeChangedListener {
-            windowNavigator.switchMode()
+            requestWindowSwitch()
             showControls()
         }
         binding.mediaControlView.setOnClickListener {
@@ -319,7 +322,7 @@ open class MainActivity : AppCompatActivity() {
                         setDrivingGuardChecked(true)
                     }
                     settingsVisible -> closeSettings()
-                    isFullscreenWindow -> windowNavigator.switchMode()
+                    isFullscreenWindow -> requestWindowSwitch()
                     else -> closeReceiver()
                 }
             }
@@ -440,6 +443,9 @@ open class MainActivity : AppCompatActivity() {
         binding.errorContent.isVisible = error && !settingsVisible && !safetyVisible
         binding.waitingFullscreenExitButton.isVisible = isFullscreenWindow &&
             state.phase == CastPhase.WAITING && !settingsVisible && !safetyVisible
+        val canSwitchWindow = bound && !windowNavigator.isTransitionPending
+        binding.waitingFullscreenExitButton.isEnabled = canSwitchWindow
+        mediaFullscreenControl.isEnabled = canSwitchWindow
         binding.startProgress.isVisible = !settingsVisible && !safetyVisible &&
             state.phase in setOf(CastPhase.STARTING, CastPhase.CONNECTING)
         binding.waitingTitle.text = when (state.phase) {
@@ -552,9 +558,13 @@ open class MainActivity : AppCompatActivity() {
     }
 
     private fun requestReturnToStandardWindow() {
-        if (!isFullscreenWindow || returningToStandard) return
-        returningToStandard = true
+        if (!isFullscreenWindow) return
+        requestWindowSwitch()
+    }
+
+    private fun requestWindowSwitch() {
         windowNavigator.switchMode()
+        renderState(lastState)
     }
 
     private fun openSettings(section: SettingsSection) {
