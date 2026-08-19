@@ -48,3 +48,35 @@
 3. 已补充：窗口控件只在服务绑定完成且没有进行中交接时可用；策略单测覆盖“目标启动失败不结束来源”和“来源结束失败不否定已接受目标”，Android 平台规则补充 `compileSdk` 与 `minSdk` 的运行时兼容门禁。
 4. 已验证：`testDebugUnitTest`、`assembleDebug`、`node scripts/check-project-ready.mjs`、`node scripts/check-skills.mjs`、`bash -n scripts/install-debug-to-device.sh` 和 `git diff --check` 通过；`lintDebug` 已确认本轮窗口代码无 `NewApi`，但仓库既有 Media3 opt-in lint 仍使全任务失败；Debug APK 已通过 `--install-only` 覆盖安装到 `S56_HQX`，未启动应用。
 5. 用户已手测通过：浮窗 -> 全屏响应速度恢复；全屏 -> 浮窗不崩溃、不隐藏应用、不出现切换失败提示，播放位置、广播和全屏图标保持正确。
+
+## 2026-08-20 商业权益、权益中心与关于页
+
+1. 已完成：按 `03歌词` 的交互骨架补齐“权益中心”和“关于”设置分区；权益页支持服务端报价、订单详情、微信 / 支付宝二维码支付、报价变化二次确认、支付轮询、同设备恢复购买和 Pro 成功态；关于页展示构建类型对应的《03投屏用户协议》二维码。
+2. 已完成：等待页接入 `Checking / Trial / Expired / Pro / Error` 五态权益摘要和购买 / 查看权益 / 重新确认入口；无权益时只拒绝媒体输出创建，不停止 `CastReceiverRuntime`，`7000 / 8200 / 1900`、mDNS、SSDP、AirPlay 与 DLNA 发现继续保持。
+3. 已完成：商业状态由进程级 `CommercialEntitlementCoordinator` 统一持有，`CommercialRuntimeAccessGuard` 只向 `CastPlaybackRouter` 提供已验签准入；播放中到期或撤权先失效会话代次，再释放播放器、镜像、音频和图片输出并回到等待，不关闭窗口、不停止接收、不发布关闭窗口的会话结束事件。
+4. 已完成：Debug 默认使用 Android Keystore 运行时生成的 `03cast` 专用 fixture 签名器；Release / staging 缺少可信许可证公钥、产品签名摘要或完整 HTTPS 配置时 fail closed。未写入真实私钥、token、keystore、生产环境文件或云端机密。
+5. 已验证：`:app:testDebugUnitTest`（88 条通过）、`:app:assembleDebug`、`:app:assembleRelease`、`node scripts/check-project-ready.mjs`、`node scripts/check-skills.mjs`、`bash -n scripts/install-debug-to-device.sh` 和 `git diff --check` 通过；Release 构建仅证明缺省配置下可构建，不能代表正式支付已接通。
+6. 已修复：服务侧撤权、配置缺失、存储失败、时钟回拨或设备不匹配统一投影为共享 `EntitlementState.Error`，等待页和设置页不再继续显示旧的 Pro 摘要；本地尚无许可证时仍保留 `Checking`，等待首次联网试用结果。
+7. 已知边界：`lintDebug` 仍被仓库既有 Media3 opt-in、资源 `UseAppTint` 和 `CastService.onStartCommand` 的 `MissingSuperCall` 阻断；本轮商业 / 窗口代码未引入 `taskId`、`RecentTaskInfo` 或 API 29+ 窗口符号。未执行 runtime smoke、截图、坐标点击、真实支付、恢复购买或真实 DLNA / AirPlay 商业门禁手测。
+8. 下一步：用户在 `S56_HQX` 完成试用 / 过期 / Pro / 查询错误四态、无权益仍可发现但无媒体输出、播放中撤权回等待、支付 / 恢复后下一次投屏、关于二维码和窗口关闭后 `7000 / 8200 / 1900` 释放的最小手测；真实 Apple 设备、AirPlay URL / HLS、HDR、镜像兼容性和不同 DLNA 媒体比例继续按验证矩阵验收。
+
+## 2026-08-20 等待页商业呈现调整
+
+1. 已完成：Trial 等待态移除“当前可以投屏”，改为显示剩余试用时间和服务端报价驱动的长购买广告；原价在广告中使用删除线，点击整句进入购买流程。
+2. 已完成：Expired 等待态改为红色“无法投屏”，灰色说明为“试用已到期，请购买Pro以继续”，并复用 Trial 的长购买广告；Pro 等待态加入与 03 歌词同源的皇冠图标，只显示“Pro 权益生效中 · 永久”。
+3. 已完成：设置页“03投屏”标题右侧角标按 03 歌词源码改为相对标题定位的同构布局，保留既有权益状态颜色和文字映射。
+4. 价格边界：广告只展示 `CommercialUiState.quote` 的服务端原价 / 活动价；云端当前正式 03cast 为 `¥65.00 / ¥39.00`，Debug fixture 为 `¥0.02 / ¥0.01`，客户端不固化 `69 / 39`。
+5. 已验证：`:app:testDebugUnitTest --rerun-tasks` 通过；上一版 Debug APK 已覆盖安装并按用户要求拉起，等待本轮广告层级调整后重新覆盖安装。
+
+## 2026-08-20 等待页双锚点布局调整
+
+1. 已完成：主等待状态组“Logo + 03投屏 + 等待投屏”与底部权益 / 广告 / 设置组彻底分离；主状态组固定向上位于中上部，底部组以设置按钮为固定锚点。
+2. 已完成：Checking、Trial、Expired、Pro、Error 只在底部辅助组内切换内容；连接进度条使用不可见占位保持主状态组位置稳定。
+3. 待验证：商业布局单测、Debug 构建和车机覆盖安装；主状态视觉间距由用户在 `S56_HQX` 实体屏幕完成最终验收。
+
+## 2026-08-20 等待页广告层级调整
+
+1. 已完成：长广告作为 Trial / Expired 等待态主体，辅助文案移动到广告按钮下方；Expired 直接替换主等待标题为红色“无法投屏”。
+2. 已完成：服务端原价删除线改为同色系蓝灰，活动价仍使用蓝紫强调色；Pro 改为按正文实际字面高度对齐的皇冠内联富文本，并从主等待内容抽离到设置入口上方；长广告点击先进入权益中心首页。
+3. 已补充：等待页状态布局与首页跳转行为的布局契约测试。
+4. 已验证：本轮 Debug APK 已通过 `--install-only` 覆盖安装到 `S56_HQX`，未启动应用。

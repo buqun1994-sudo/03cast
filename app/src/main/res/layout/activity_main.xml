@@ -97,7 +97,8 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:gravity="center_horizontal"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:translationY="@dimen/cast_waiting_primary_translation_y">
 
             <ImageView
                 android:id="@+id/waiting_icon"
@@ -131,26 +132,53 @@
                 android:layout_height="48dp"
                 android:layout_marginTop="28dp"
                 android:indeterminateTint="@color/cast_accent" />
+
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/settings_button"
-            android:layout_width="wrap_content"
-            android:layout_height="@dimen/cast_touch_target"
+        <LinearLayout
+            android:id="@+id/waiting_bottom_actions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:layout_gravity="bottom|center_horizontal"
-            android:layout_marginBottom="48dp"
-            android:background="@android:color/transparent"
-            android:contentDescription="@string/settings"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:minHeight="0dp"
-            android:paddingStart="48dp"
-            android:paddingEnd="48dp"
-            android:text="@string/settings"
-            android:textAllCaps="false"
-            android:textColor="@color/cast_accent"
-            android:textSize="@dimen/cast_body_size" />
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <include
+                layout="@layout/view_cast_commercial_waiting"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp" />
+
+            <TextView
+                android:id="@+id/cast_commercial_waiting_pro_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:gravity="center"
+                android:maxWidth="760dp"
+                android:minHeight="32dp"
+                android:textColor="@color/cast_text_secondary"
+                android:textSize="@dimen/cast_caption_size"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/settings_button"
+                android:layout_width="wrap_content"
+                android:layout_height="@dimen/cast_touch_target"
+                android:layout_marginBottom="48dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="@string/settings"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:minHeight="0dp"
+                android:paddingStart="48dp"
+                android:paddingEnd="48dp"
+                android:text="@string/settings"
+                android:textAllCaps="false"
+                android:textColor="@color/cast_accent"
+                android:textSize="@dimen/cast_body_size" />
+        </LinearLayout>
 
         <ImageButton
             android:id="@+id/waiting_fullscreen_exit_button"
@@ -222,15 +250,34 @@
                 android:paddingEnd="@dimen/cast_settings_sidebar_padding"
                 android:paddingBottom="@dimen/cast_settings_content_padding_vertical">
 
-                <TextView
-                    android:id="@+id/settings_title"
+                <RelativeLayout
                     android:layout_width="match_parent"
-                    android:layout_height="@dimen/cast_settings_title_height"
-                    android:gravity="center"
-                    android:text="@string/app_name"
-                    android:textColor="@color/cast_text_primary"
-                    android:textSize="@dimen/cast_title_size"
-                    android:textStyle="bold" />
+                    android:layout_height="@dimen/cast_settings_title_height">
+
+                    <TextView
+                        android:id="@+id/settings_title_text"
+                        style="@style/SettingsText.Title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_centerInParent="true"
+                        android:gravity="center"
+                        android:text="@string/app_name" />
+
+                    <TextView
+                        android:id="@+id/settings_entitlement_badge"
+                        android:layout_width="@dimen/commercial_badge_width"
+                        android:layout_height="@dimen/commercial_badge_height"
+                        android:layout_alignBottom="@id/settings_title_text"
+                        android:layout_marginStart="8dp"
+                        android:layout_marginBottom="8dp"
+                        android:layout_toEndOf="@id/settings_title_text"
+                        android:background="@drawable/bg_commercial_corner_badge"
+                        android:gravity="center"
+                        android:includeFontPadding="false"
+                        android:text="@string/commercial_badge_checking"
+                        android:textColor="@color/commercial_expired_text"
+                        android:textSize="@dimen/commercial_badge_text" />
+                </RelativeLayout>
 
                 <LinearLayout
                     android:id="@+id/settings_navigation_receiver"
@@ -292,6 +339,73 @@
                         android:text="@string/settings_safety"
                         android:textColor="@color/cast_text_primary"
                         android:textSize="@dimen/cast_body_size"
+                    android:textStyle="bold" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/settings_navigation_entitlement"
+                    android:layout_width="@dimen/cast_settings_navigation_width"
+                    android:layout_height="@dimen/cast_settings_navigation_height"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="27dp"
+                    android:paddingEnd="27dp">
+
+                    <ImageView
+                        android:id="@+id/settings_navigation_entitlement_icon"
+                        android:layout_width="@dimen/cast_settings_navigation_icon"
+                        android:layout_height="@dimen/cast_settings_navigation_icon"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_settings_navigation_entitlement" />
+
+                    <TextView
+                        android:id="@+id/settings_navigation_entitlement_label"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginStart="@dimen/cast_settings_navigation_label_spacing"
+                        android:layout_weight="1"
+                        android:gravity="center_vertical|start"
+                        android:text="@string/settings_navigation_entitlement"
+                        android:textColor="@color/cast_text_primary"
+                        android:textSize="@dimen/cast_body_size"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
+
+                <LinearLayout
+                    android:id="@+id/settings_navigation_about"
+                    android:layout_width="@dimen/cast_settings_navigation_width"
+                    android:layout_height="@dimen/cast_settings_navigation_height"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="27dp"
+                    android:paddingEnd="27dp">
+
+                    <ImageView
+                        android:id="@+id/settings_navigation_about_icon"
+                        android:layout_width="@dimen/cast_settings_navigation_icon"
+                        android:layout_height="@dimen/cast_settings_navigation_icon"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_settings_navigation_about" />
+
+                    <TextView
+                        android:id="@+id/settings_navigation_about_label"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginStart="@dimen/cast_settings_navigation_label_spacing"
+                        android:layout_weight="1"
+                        android:gravity="center_vertical|start"
+                        android:text="@string/settings_navigation_about"
+                        android:textColor="@color/cast_text_primary"
+                        android:textSize="@dimen/cast_body_size"
                         android:textStyle="bold" />
                 </LinearLayout>
             </LinearLayout>
@@ -303,10 +417,13 @@
                 android:background="@drawable/cast_settings_content"
                 android:orientation="vertical">
 
+                <include layout="@layout/view_cast_commercial_summary" />
+
                 <ScrollView
                     android:id="@+id/settings_content_scroll"
                     android:layout_width="match_parent"
-                    android:layout_height="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
                     android:clipToPadding="false"
                     android:fillViewport="true"
                     android:overScrollMode="never">
@@ -517,6 +634,9 @@
                                     android:textStyle="bold" />
                             </LinearLayout>
                         </LinearLayout>
+
+                        <include layout="@layout/content_settings_commercial" />
+                        <include layout="@layout/content_settings_about" />
                     </FrameLayout>
                 </ScrollView>
             </LinearLayout>

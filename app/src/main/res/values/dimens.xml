@@ -8,6 +8,7 @@
     <dimen name="cast_status_size">31.75sp</dimen>
     <dimen name="cast_body_size">27.25sp</dimen>
     <dimen name="cast_caption_size">22.75sp</dimen>
+    <dimen name="cast_waiting_primary_translation_y">-128dp</dimen>
     <dimen name="cast_control_gap">20dp</dimen>
     <dimen name="cast_control_bar_height">143dp</dimen>
     <dimen name="cast_media_primary_control_width">144dp</dimen>

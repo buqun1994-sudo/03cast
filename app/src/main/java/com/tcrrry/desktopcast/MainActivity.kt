@@ -28,6 +28,16 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.TimeBar
+import com.tcrrry.desktopcast.commercial.CommercialAccessUpdate
+import com.tcrrry.desktopcast.commercial.CommercialController
+import com.tcrrry.desktopcast.commercial.CommercialRuntimeFactory
+import com.tcrrry.desktopcast.commercial.CommercialSettingsRenderer
+import com.tcrrry.desktopcast.commercial.CommercialUiState
+import com.tcrrry.desktopcast.commercial.CommercialVariantUi
+import com.tcrrry.desktopcast.commercial.CommercialViewActions
+import com.tcrrry.desktopcast.commercial.CheckoutState
+import com.tcrrry.desktopcast.commercial.EntitlementState
+import com.tcrrry.desktopcast.commercial.RecoveryState
 import com.tcrrry.desktopcast.databinding.ActivityMainBinding
 import com.tcrrry.desktopcast.safety.DrivingSafetyAlert
 import com.tcrrry.desktopcast.safety.DrivingState
@@ -64,6 +74,9 @@ open class MainActivity : AppCompatActivity() {
     private lateinit var mediaTimelineGroup: View
     private lateinit var mediaProgressView: View
     private lateinit var mediaFullscreenControl: View
+    private lateinit var aboutTermsQr: ImageView
+    private lateinit var settingsCommercialContent: View
+    private lateinit var settingsAboutContent: View
     private lateinit var windowNavigator: CastWindowNavigator
     private var settingsVisible = false
     private var selectedSettingsSection = SettingsSection.RECEIVER
@@ -71,10 +84,15 @@ open class MainActivity : AppCompatActivity() {
     private var drivingSafetyExitHandled = false
     private var updatingDrivingGuard = false
     private var rootBackgroundShowsSettings = false
+    private lateinit var commercialRenderer: CommercialSettingsRenderer
+    private lateinit var commercialController: CommercialController
+    private lateinit var commercialWaitingRenderer: CastCommercialWaitingRenderer
 
     private enum class SettingsSection {
         RECEIVER,
         SAFETY,
+        COMMERCIAL,
+        ABOUT,
     }
 
     private val hideControls = Runnable {
@@ -110,6 +128,9 @@ open class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        aboutTermsQr = binding.root.findViewById(R.id.about_terms_qr)
+        settingsCommercialContent = binding.root.findViewById(R.id.settings_commercial_content)
+        settingsAboutContent = binding.root.findViewById(R.id.settings_about_content)
         configureControlsOverlay()
         windowNavigator = CastWindowNavigator(
             activity = this,
@@ -122,6 +143,7 @@ open class MainActivity : AppCompatActivity() {
         )
         configureMediaControls()
         configureAgreementQrCode()
+        configureCommercialUi()
         configureActions()
         configureSurfaces()
         binding.root.addOnLayoutChangeListener { _, left, top, right, bottom,
@@ -134,6 +156,7 @@ open class MainActivity : AppCompatActivity() {
         renderSettingsSection(selectedSettingsSection)
         renderDrivingGuard(isDrivingPlaybackGuardEnabled())
         renderDrivingState(DrivingState.UNAVAILABLE)
+        commercialWaitingRenderer.render(commercialController.state)
         renderState(lastState)
     }
 
@@ -142,6 +165,7 @@ open class MainActivity : AppCompatActivity() {
         setIntent(intent)
         syncFullscreenControlState()
         windowNavigator.completeHandoffIfRequested(intent)
+        CommercialVariantUi.handleDebugIntent(this, intent, commercialController)
     }
 
     override fun onStart() {
@@ -173,6 +197,52 @@ open class MainActivity : AppCompatActivity() {
         super.onStop()
     }
 
+    override fun onDestroy() {
+        if (::commercialController.isInitialized) commercialController.close()
+        super.onDestroy()
+    }
+
+    private fun configureCommercialUi() {
+        commercialWaitingRenderer = CastCommercialWaitingRenderer(
+            root = binding.root,
+            actions = CastCommercialWaitingActions(
+                onBuyPro = ::openCommercialEntitlement,
+                onViewEntitlement = ::openCommercialEntitlement,
+                onRetry = { commercialController.reloadEntitlement() },
+            ),
+        )
+        commercialRenderer = CommercialSettingsRenderer(
+            root = binding.root,
+            actions = CommercialViewActions(
+                onOpenEntitlement = ::openCommercialEntitlement,
+                onCheckout = ::openCommercialPurchase,
+                onRetryEntitlement = { commercialController.reloadEntitlement() },
+                onDiscountCodeChanged = { value -> commercialController.changeDiscountCode(value) },
+                onApplyDiscount = { commercialController.applyDiscountCode() },
+                onPaymentMethodChanged = { commercialController.selectPaymentMethod(it) },
+                onPay = { commercialController.createPayment() },
+                onRestore = { commercialController.restorePurchase() },
+            ),
+        )
+        commercialRenderer.updateAccent(
+            accentColor = ContextCompat.getColor(this, R.color.cast_accent),
+            accentTextColor = ContextCompat.getColor(this, R.color.commercial_action_text),
+        )
+        commercialController = CommercialController(
+            gateway = CommercialRuntimeFactory.gateway(this),
+            coordinator = CommercialRuntimeFactory.entitlementCoordinator(this),
+            onStateChanged = ::renderCommercialState,
+            onAccessMayHaveChanged = ::refreshCommercialAccess,
+        )
+        // The renderer actions are installed before the controller is created;
+        // callbacks are only invoked after the Activity is visible.
+        CommercialVariantUi.handleDebugIntent(this, intent, commercialController)
+        commercialRenderer.render(commercialController.state)
+        commercialWaitingRenderer.render(commercialController.state)
+        commercialController.start()
+    }
+
+
     private fun configureActions() {
         binding.closeButton.setOnClickListener { disconnectCurrentSession() }
         binding.waitingFullscreenExitButton.setOnClickListener {
@@ -185,6 +255,12 @@ open class MainActivity : AppCompatActivity() {
         }
         binding.settingsNavigationSafety.setOnClickListener {
             renderSettingsSection(SettingsSection.SAFETY)
+        }
+        binding.settingsNavigationEntitlement.setOnClickListener {
+            openCommercialEntitlement()
+        }
+        binding.settingsNavigationAbout.setOnClickListener {
+            openSettings(SettingsSection.ABOUT)
         }
         binding.drivingGuardSetting.setOnClickListener {
             binding.drivingGuardSwitch.performClick()
@@ -253,6 +329,10 @@ open class MainActivity : AppCompatActivity() {
         binding.drivingGuardAgreementQr.setImageBitmap(
             TermsQrCodeFactory.create(BuildConfig.TERMS_URL, AGREEMENT_QR_BITMAP_SIZE_PX),
         )
+        aboutTermsQr.setImageBitmap(
+            TermsQrCodeFactory.create(BuildConfig.TERMS_URL, ABOUT_QR_BITMAP_SIZE_PX),
+        )
+        aboutTermsQr.contentDescription = getString(R.string.accessibility_about_terms_qr)
     }
 
     /**
@@ -321,6 +401,8 @@ open class MainActivity : AppCompatActivity() {
                         binding.drivingGuardWarning.isVisible = false
                         setDrivingGuardChecked(true)
                     }
+                    settingsVisible && selectedSettingsSection == SettingsSection.COMMERCIAL &&
+                        commercialRenderer.consumeBack() -> Unit
                     settingsVisible -> closeSettings()
                     isFullscreenWindow -> requestWindowSwitch()
                     else -> closeReceiver()
@@ -446,13 +528,16 @@ open class MainActivity : AppCompatActivity() {
         val canSwitchWindow = bound && !windowNavigator.isTransitionPending
         binding.waitingFullscreenExitButton.isEnabled = canSwitchWindow
         mediaFullscreenControl.isEnabled = canSwitchWindow
-        binding.startProgress.isVisible = !settingsVisible && !safetyVisible &&
+        binding.startProgress.visibility = if (!settingsVisible && !safetyVisible &&
             state.phase in setOf(CastPhase.STARTING, CastPhase.CONNECTING)
-        binding.waitingTitle.text = when (state.phase) {
-            CastPhase.STARTING, CastPhase.CONNECTING -> getString(R.string.connecting)
-            else -> getString(R.string.waiting_title)
+        ) {
+            View.VISIBLE
+        } else {
+            View.INVISIBLE
         }
+        renderWaitingTitle(state)
         binding.waitingDeviceName.text = getString(R.string.waiting_device_name)
+        commercialWaitingRenderer.render(commercialController.state)
         binding.errorMessage.text = state.detail.ifBlank { getString(R.string.receiver_start_failed) }
 
         binding.mirrorSurface.isVisible = active && !safetyVisible &&
@@ -574,6 +659,55 @@ open class MainActivity : AppCompatActivity() {
         renderState(lastState)
     }
 
+    private fun openCommercialEntitlement() {
+        commercialController.showEntitlementPage()
+        openSettings(SettingsSection.COMMERCIAL)
+    }
+
+    private fun openCommercialPurchase() {
+        openSettings(SettingsSection.COMMERCIAL)
+        commercialController.showCheckout()
+        if (commercialController.state.quote == null &&
+            commercialController.state.entitlement !is EntitlementState.Pro
+        ) {
+            commercialController.reloadEntitlement()
+        }
+    }
+
+    private fun refreshCommercialAccess(update: CommercialAccessUpdate) {
+        if (update == CommercialAccessUpdate.RECHECK || update == CommercialAccessUpdate.REVOKED) {
+            castService?.refreshCommercialAccess()
+        }
+    }
+
+    private fun renderCommercialState(state: CommercialUiState) {
+        commercialRenderer.render(state)
+        commercialWaitingRenderer.render(state)
+        renderWaitingTitle(lastState)
+        if (state.checkout is CheckoutState.Paid || state.recovery is RecoveryState.Success) {
+            openSettings(SettingsSection.COMMERCIAL)
+        }
+    }
+
+    private fun renderWaitingTitle(state: CastSessionState) {
+        val expiredWaiting = state.phase == CastPhase.WAITING &&
+            commercialController.state.entitlement == EntitlementState.Expired
+        binding.waitingTitle.setText(
+            when {
+                expiredWaiting -> R.string.cast_commercial_waiting_unavailable
+                state.phase == CastPhase.STARTING || state.phase == CastPhase.CONNECTING ->
+                    R.string.connecting
+                else -> R.string.waiting_title
+            },
+        )
+        binding.waitingTitle.setTextColor(
+            ContextCompat.getColor(
+                this,
+                if (expiredWaiting) R.color.cast_error else R.color.cast_text_secondary,
+            ),
+        )
+    }
+
     private fun closeSettings() {
         binding.drivingGuardWarning.isVisible = false
         settingsVisible = false
@@ -583,8 +717,13 @@ open class MainActivity : AppCompatActivity() {
     private fun renderSettingsSection(section: SettingsSection) {
         selectedSettingsSection = section
         val receiverSelected = section == SettingsSection.RECEIVER
+        val safetySelected = section == SettingsSection.SAFETY
+        val commercialSelected = section == SettingsSection.COMMERCIAL
+        val aboutSelected = section == SettingsSection.ABOUT
         binding.settingsReceiverContent.isVisible = receiverSelected
-        binding.settingsSafetyContent.isVisible = !receiverSelected
+        binding.settingsSafetyContent.isVisible = safetySelected
+        settingsCommercialContent.isVisible = commercialSelected
+        settingsAboutContent.isVisible = aboutSelected
         renderSettingsNavigation(
             binding.settingsNavigationReceiver,
             binding.settingsNavigationReceiverIcon,
@@ -595,8 +734,21 @@ open class MainActivity : AppCompatActivity() {
             binding.settingsNavigationSafety,
             binding.settingsNavigationSafetyIcon,
             binding.settingsNavigationSafetyLabel,
-            !receiverSelected,
+            safetySelected,
         )
+        renderSettingsNavigation(
+            binding.settingsNavigationEntitlement,
+            binding.settingsNavigationEntitlementIcon,
+            binding.settingsNavigationEntitlementLabel,
+            commercialSelected,
+        )
+        renderSettingsNavigation(
+            binding.settingsNavigationAbout,
+            binding.settingsNavigationAboutIcon,
+            binding.settingsNavigationAboutLabel,
+            aboutSelected,
+        )
+        commercialRenderer.setSummaryVisibleForSection(!commercialSelected)
         binding.settingsContentScroll.scrollTo(0, 0)
     }
 
@@ -705,6 +857,7 @@ open class MainActivity : AppCompatActivity() {
     private companion object {
         const val CONTROLS_TIMEOUT_MS = 3_000L
         const val AGREEMENT_QR_BITMAP_SIZE_PX = 512
+        const val ABOUT_QR_BITMAP_SIZE_PX = 512
         val ACTIVE_PHASES = setOf(
             CastPhase.PLAYING,
             CastPhase.MIRRORING,

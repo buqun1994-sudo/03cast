@@ -85,6 +85,17 @@ class CastSessionCoordinatorTest {
     }
 
     @Test
+    fun commercialAccessEndedInvalidatesLeaseWithoutSessionEndEvent() {
+        val coordinator = activeAudioCoordinator()
+        val lease = coordinator.leaseFor(CastProtocol.AIRPLAY)!!
+
+        coordinator.commercialAccessEnded()
+
+        assertEquals(CastSessionState(phase = CastPhase.WAITING), coordinator.state.value)
+        assertFalse(coordinator.isCurrent(lease))
+    }
+
+    @Test
     fun stoppedCoordinatorIgnoresNewClaims() {
         val coordinator = activeAudioCoordinator()
         coordinator.stop()

@@ -16,6 +16,7 @@ import com.tcrrry.desktopcast.renderer.PlaybackSnapshot
 import com.tcrrry.desktopcast.renderer.VideoRenderer
 import com.tcrrry.desktopcast.safety.DrivingPlaybackInterlock
 import com.tcrrry.desktopcast.session.CastContentKind
+import com.tcrrry.desktopcast.session.CastPhase
 import com.tcrrry.desktopcast.session.CastProtocol
 import com.tcrrry.desktopcast.session.CastSessionCoordinator
 import com.tcrrry.desktopcast.session.CastSessionEndEvent
@@ -39,11 +40,12 @@ import kotlinx.coroutines.launch
  * obtain a lease here before changing playback, which keeps DLNA, AirPlay HLS,
  * mirroring and audio under one session authority.
  */
-class CastPlaybackRouter(
+class CastPlaybackRouter internal constructor(
     context: Context,
     scope: CoroutineScope,
     private val coordinator: CastSessionCoordinator,
     audioManager: AudioManager,
+    private val commercialAccess: CastCommercialAccessPort,
 ) {
 
     private val appContext = context.applicationContext
@@ -154,6 +156,35 @@ class CastPlaybackRouter(
         mediaControlBridge.refresh()
     }
 
+    /** Releases only media output after entitlement revocation or expiry. */
+    fun blockForCommercialAccess() = runOnMain {
+        if (sessionState.value.phase !in setOf(
+                CastPhase.CONNECTING,
+                CastPhase.PLAYING,
+                CastPhase.MIRRORING,
+                CastPhase.AUDIO,
+            )
+        ) return@runOnMain
+        // Invalidate the generation first so callbacks racing with release
+        // cannot reclaim output or rewrite the waiting state.
+        val protocol = sessionState.value.protocol
+        coordinator.commercialAccessEnded()
+        when (protocol) {
+            CastProtocol.AIRPLAY -> {
+                dropAirPlayConnections()
+                airPlayAdapter.releaseOutput()
+            }
+            CastProtocol.DLNA -> {
+                dlnaAdapter.releaseOutput(clearMedia = true)
+                notifyDlnaTransportChanged()
+            }
+            null -> Unit
+        }
+        stopNetworkPlayback()
+        mutableMediaAspect.value = 16f / 9f
+        mediaControlBridge.refresh()
+    }
+
     /** Stops outputs while keeping receiver listeners available for a restart. */
     fun stopOutputs() = runOnMain(::stopOutputsInternal)
 
@@ -168,6 +199,10 @@ class CastPlaybackRouter(
     /** Starts a new external sender or media item; never use this for a callback update. */
     internal fun beginSession(protocol: CastProtocol): CastSessionLease? {
         checkOnMainThread()
+        if (!commercialAccess.hasCurrentAccess()) {
+            commercialAccess.onMediaAttemptDenied()
+            return null
+        }
         if (drivingPlaybackInterlock.isBlocked) return null
         val previousProtocol = sessionState.value.protocol
         val lease = coordinator.beginSession(protocol) ?: return null
@@ -185,6 +220,10 @@ class CastPlaybackRouter(
      */
     internal fun beginAirPlayMirrorSession(preserveAudio: Boolean): CastSessionLease? {
         checkOnMainThread()
+        if (!commercialAccess.hasCurrentAccess()) {
+            commercialAccess.onMediaAttemptDenied()
+            return null
+        }
         if (drivingPlaybackInterlock.isBlocked) return null
         if (preserveAudio &&
             sessionState.value.protocol == CastProtocol.AIRPLAY &&
@@ -204,12 +243,17 @@ class CastPlaybackRouter(
     /** Reuses the current generation for callbacks belonging to the same sender. */
     internal fun ensureSession(protocol: CastProtocol): CastSessionLease? {
         checkOnMainThread()
+        if (!commercialAccess.hasCurrentAccess()) {
+            commercialAccess.onMediaAttemptDenied()
+            return null
+        }
         if (drivingPlaybackInterlock.isBlocked) return null
         return coordinator.leaseFor(protocol) ?: beginSession(protocol)
     }
 
     internal fun isCurrent(lease: CastSessionLease): Boolean =
-        !drivingPlaybackInterlock.isBlocked && coordinator.isCurrent(lease)
+        commercialAccess.hasCurrentAccess() &&
+            !drivingPlaybackInterlock.isBlocked && coordinator.isCurrent(lease)
 
     internal fun showContent(
         lease: CastSessionLease,

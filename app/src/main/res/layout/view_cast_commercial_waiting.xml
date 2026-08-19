@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/cast_commercial_waiting_panel"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_horizontal"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/cast_commercial_waiting_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:maxWidth="760dp"
+        android:text="@string/cast_commercial_waiting_checking"
+        android:textColor="@color/cast_text_secondary"
+        android:textSize="@dimen/cast_caption_size" />
+
+    <TextView
+        android:id="@+id/cast_commercial_waiting_detail"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:maxWidth="760dp"
+        android:textColor="@color/cast_text_secondary"
+        android:textSize="@dimen/cast_caption_size"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/cast_commercial_waiting_actions"
+        android:layout_width="wrap_content"
+        android:layout_height="@dimen/cast_touch_target"
+        android:layout_marginTop="14dp"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/cast_commercial_purchase_ad"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:background="@android:color/transparent"
+            android:clickable="true"
+            android:ellipsize="end"
+            android:focusable="true"
+            android:gravity="center"
+            android:maxLines="1"
+            android:maxWidth="1000dp"
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp"
+            android:text="@string/cast_commercial_purchase_ad_fallback"
+            android:textColor="@color/cast_accent"
+            android:textSize="@dimen/cast_body_size"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/cast_commercial_buy_pro"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:background="@android:color/transparent"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingStart="32dp"
+            android:paddingEnd="32dp"
+            android:text="@string/cast_commercial_buy_pro"
+            android:textColor="@color/cast_accent"
+            android:textSize="@dimen/cast_body_size" />
+
+        <TextView
+            android:id="@+id/cast_commercial_view_entitlement"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:background="@android:color/transparent"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingStart="32dp"
+            android:paddingEnd="32dp"
+            android:text="@string/cast_commercial_view_entitlement"
+            android:textColor="@color/cast_accent"
+            android:textSize="@dimen/cast_body_size" />
+
+        <TextView
+            android:id="@+id/cast_commercial_retry"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:background="@android:color/transparent"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingStart="32dp"
+            android:paddingEnd="32dp"
+            android:text="@string/cast_commercial_retry"
+            android:textColor="@color/cast_accent"
+            android:textSize="@dimen/cast_body_size"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/cast_commercial_waiting_purchase_detail"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:maxWidth="760dp"
+        android:textColor="@color/cast_text_secondary"
+        android:textSize="@dimen/cast_caption_size"
+        android:visibility="gone" />
+</LinearLayout>

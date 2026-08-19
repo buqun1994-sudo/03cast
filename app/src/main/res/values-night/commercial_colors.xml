@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="settings_screen_background">@color/cast_background</color>
+    <color name="settings_sidebar_background">@color/cast_settings_sidebar_background</color>
+    <color name="settings_content_background_start">@color/cast_settings_content_background_start</color>
+    <color name="settings_content_background_center">@color/cast_settings_content_background_center</color>
+    <color name="settings_content_background_end">@color/cast_settings_content_background_end</color>
+    <color name="settings_control_background">@color/cast_settings_card_background</color>
+    <color name="settings_text_primary">@color/cast_text_primary</color>
+    <color name="settings_text_secondary">@color/cast_text_secondary</color>
+    <color name="settings_text_option">@color/cast_text_secondary</color>
+    <color name="settings_accent">@color/cast_accent</color>
+    <color name="settings_switch_thumb_color">@color/cast_settings_switch_thumb</color>
+    <color name="settings_switch_track_off">@color/cast_settings_switch_track_off</color>
+    <color name="settings_selected_background">@color/cast_accent</color>
+    <color name="commercial_action">@color/cast_accent</color>
+    <color name="commercial_action_text">#FFFFFFFF</color>
+    <color name="commercial_ad_original_price">#FF9299C4</color>
+    <color name="commercial_trial_badge">#FF234B63</color>
+    <color name="commercial_trial_text">#FFD9EDFF</color>
+    <color name="commercial_expired_badge">#FF3E4148</color>
+    <color name="commercial_expired_text">#FFE7E8EB</color>
+    <color name="commercial_pro_badge">#FFF2C94C</color>
+    <color name="commercial_pro_text">#FF29230F</color>
+    <color name="commercial_error">@color/cast_error</color>
+    <color name="commercial_qr_background">#FFFFFFFF</color>
+</resources>

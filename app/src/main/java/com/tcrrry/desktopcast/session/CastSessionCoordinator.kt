@@ -112,6 +112,22 @@ class CastSessionCoordinator {
         }
     }
 
+    /** Ends media because commercial access changed, while keeping the receiver alive. */
+    fun commercialAccessEnded() = mutate { current ->
+        if (current.phase in setOf(
+                CastPhase.CONNECTING,
+                CastPhase.PLAYING,
+                CastPhase.MIRRORING,
+                CastPhase.AUDIO,
+            )
+        ) {
+            generation += 1
+            CastSessionState(phase = CastPhase.WAITING)
+        } else {
+            current
+        }
+    }
+
     fun stop() = mutate {
         generation += 1
         CastSessionState(phase = CastPhase.STOPPED)

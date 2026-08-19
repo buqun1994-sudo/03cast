@@ -2,6 +2,8 @@ package com.tcrrry.desktopcast.service
 
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.BroadcastReceiver
 import android.media.AudioManager
 import android.os.Binder
 import android.os.Handler
@@ -11,8 +13,10 @@ import android.util.Log
 import android.view.SurfaceHolder
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import androidx.core.content.ContextCompat
 import com.tcrrry.desktopcast.Prefs
 import com.tcrrry.desktopcast.R
+import com.tcrrry.desktopcast.commercial.CommercialAccessDecision
 import com.tcrrry.desktopcast.network.LanAddressMonitor
 import com.tcrrry.desktopcast.safety.DrivingSafetyAlert
 import com.tcrrry.desktopcast.safety.DrivingSafetyPolicy
@@ -46,15 +50,25 @@ class CastService : LifecycleService() {
     private var safetyCountdown: Runnable? = null
     private var safetySecondsRemaining = 0
     private var safetyStateCollector: Job? = null
+    private var commercialAccessBoundaryReceiverRegistered = false
     private val coordinator = CastSessionCoordinator()
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     private val preferences by lazy { getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE) }
+    private val commercialAccess by lazy {
+        CastCommercialAccessAdapter(
+            context = this,
+            scope = lifecycleScope,
+            mainHandler = mainHandler,
+            onAccessDenied = ::onCommercialAccessDenied,
+        )
+    }
     private val playback by lazy {
         CastPlaybackRouter(
             context = this,
             scope = lifecycleScope,
             coordinator = coordinator,
             audioManager = audioManager,
+            commercialAccess = commercialAccess,
         )
     }
     private val runtime by lazy {
@@ -74,6 +88,15 @@ class CastService : LifecycleService() {
     }
     private val mutableDrivingState = MutableStateFlow(DrivingState.UNAVAILABLE)
     private val mutableDrivingSafetyAlert = MutableStateFlow<DrivingSafetyAlert?>(null)
+    private val commercialAccessBoundaryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_ON ||
+                intent?.action == Intent.ACTION_TIME_CHANGED
+            ) {
+                commercialAccess.revalidate()
+            }
+        }
+    }
     private val drivingStateMonitor by lazy {
         IcarDrivingStateMonitor(this) { state ->
             runOnMain {
@@ -115,6 +138,7 @@ class CastService : LifecycleService() {
         // has installed its scope and before the first client binds.
         playback
         runtime
+        commercialAccess
         safetyStateCollector = lifecycleScope.launch {
             playback.sessionState.collect { evaluateDrivingSafety() }
         }
@@ -122,6 +146,8 @@ class CastService : LifecycleService() {
 
     fun startCasting() = runOnMain {
         if (!started.compareAndSet(false, true)) return@runOnMain
+        registerCommercialAccessBoundaryReceiver()
+        commercialAccess.start()
         playback.beginReceiverLifecycle()
         coordinator.beginStart()
         drivingStateMonitor.start()
@@ -166,6 +192,10 @@ class CastService : LifecycleService() {
         handleLanAddress(networkMonitor.currentAddress(), force = true)
     }
 
+    fun refreshCommercialAccess() = runOnMain {
+        if (started.get()) commercialAccess.refresh()
+    }
+
     fun stopCasting() = stopCasting(clearSafetyAlert = true)
 
     private fun stopCasting(clearSafetyAlert: Boolean) = runOnMain {
@@ -179,6 +209,8 @@ class CastService : LifecycleService() {
         coordinator.stop()
         networkMonitor.stop()
         runtime.stop()
+        commercialAccess.clear()
+        unregisterCommercialAccessBoundaryReceiver()
     }
 
     fun setMirrorSurface(holder: SurfaceHolder, bufferWidth: Int = 0, bufferHeight: Int = 0) =
@@ -211,6 +243,8 @@ class CastService : LifecycleService() {
         coordinator.stop()
         networkMonitor.stop()
         runtime.stop()
+        commercialAccess.clear()
+        unregisterCommercialAccessBoundaryReceiver()
         playback.release()
         super.onDestroy()
     }
@@ -240,6 +274,38 @@ class CastService : LifecycleService() {
             runtime.stop()
             coordinator.recoverableError(null, getString(R.string.receiver_start_failed))
         }
+    }
+
+    private fun onCommercialAccessDenied(access: CommercialAccessDecision.Denied) {
+        runOnMain {
+            if (!started.get()) return@runOnMain
+            Log.i(TAG, "Commercial media access ended: ${access.reason}")
+            playback.blockForCommercialAccess()
+        }
+    }
+
+    private fun registerCommercialAccessBoundaryReceiver() {
+        if (commercialAccessBoundaryReceiverRegistered) return
+        runCatching {
+            ContextCompat.registerReceiver(
+                this,
+                commercialAccessBoundaryReceiver,
+                IntentFilter().apply {
+                    addAction(Intent.ACTION_SCREEN_ON)
+                    addAction(Intent.ACTION_TIME_CHANGED)
+                },
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            commercialAccessBoundaryReceiverRegistered = true
+        }.onFailure { error ->
+            Log.w(TAG, "Commercial access boundary receiver unavailable", error)
+        }
+    }
+
+    private fun unregisterCommercialAccessBoundaryReceiver() {
+        if (!commercialAccessBoundaryReceiverRegistered) return
+        runCatching { unregisterReceiver(commercialAccessBoundaryReceiver) }
+        commercialAccessBoundaryReceiverRegistered = false
     }
 
     private fun runOnMain(action: () -> Unit) {
