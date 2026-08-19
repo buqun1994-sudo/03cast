@@ -71,6 +71,7 @@ struct raop_s {
     uint8_t maxFPS;
     uint8_t overscanned;
     uint8_t clientFPSdata;
+    char display_uuid[37];
 
     int audio_delay_micros;
 
@@ -628,6 +629,9 @@ raop_init(raop_callbacks_t *callbacks) {
     raop->refreshRate = 60;
     raop->maxFPS = 30;
     raop->overscanned = 0;
+    strncpy(raop->display_uuid, "e0ff8a27-6738-3d56-8a16-cc53aacee925",
+            sizeof(raop->display_uuid) - 1);
+    raop->display_uuid[sizeof(raop->display_uuid) - 1] = '\0';
 
     /* initialise stored pin */
     raop->pin = 0;
@@ -785,6 +789,14 @@ void
 raop_set_port(raop_t *raop, unsigned short port) {
     assert(raop);
     raop->port = port;
+}
+
+void
+raop_set_display_uuid(raop_t *raop, const char *uuid) {
+    assert(raop);
+    if (!uuid || strlen(uuid) == 0 || strlen(uuid) >= sizeof(raop->display_uuid)) return;
+    strncpy(raop->display_uuid, uuid, sizeof(raop->display_uuid) - 1);
+    raop->display_uuid[sizeof(raop->display_uuid) - 1] = '\0';
 }
 
 void

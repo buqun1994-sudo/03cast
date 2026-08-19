@@ -18,6 +18,7 @@ import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.source.UnrecognizedInputFormatException
 
 // rate is 0 while buffering; speed is the configured rate regardless of pause state
 // native reads the effective rate, overlay reads playWhenReady + speed + skipSilence
@@ -40,6 +41,11 @@ class NetworkMediaPlayer(private val context: Context) {
         .setMediaCodecSelector(HARDWARE_VIDEO_CODEC_SELECTOR)
     private var player: ExoPlayer? = null
     private var pendingSurfaceHolder: SurfaceHolder? = null
+    private var currentLocation: String? = null
+    private var currentStartPositionSeconds = 0f
+    private var currentDeclaredMimeType: String? = null
+    private var allowHlsFallback = false
+    private var hlsFallbackAttempted = false
 
     var onPlaybackInfo: ((PlaybackSnapshot) -> Unit)? = null
     var onVideoSize: ((width: Int, height: Int, aspect: Float) -> Unit)? = null
@@ -56,7 +62,22 @@ class NetworkMediaPlayer(private val context: Context) {
     }
 
     private val _listener = object : Player.Listener {
+        @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            if (allowHlsFallback && !hlsFallbackAttempted && isUnrecognizedInput(error)) {
+                hlsFallbackAttempted = true
+                val location = currentLocation
+                if (location != null) {
+                    Log.w(TAG, "Progressive probe failed; retrying DLNA media as HLS")
+                    _playInternal(
+                        location = location,
+                        startPositionSeconds = currentStartPositionSeconds,
+                        declaredMimeType = currentDeclaredMimeType,
+                        forcedMimeType = MimeTypes.APPLICATION_M3U8,
+                    )
+                    return
+                }
+            }
             Log.w(TAG, "playback error", error)
             onError?.invoke(error.message ?: "Playback failed")
         }
@@ -100,7 +121,26 @@ class NetworkMediaPlayer(private val context: Context) {
         }
     }
 
-    fun play(location: String, startPositionSeconds: Float) = runOnMain {
+    fun play(
+        location: String,
+        startPositionSeconds: Float,
+        declaredMimeType: String? = null,
+        allowHlsFallback: Boolean = false,
+    ) = runOnMain {
+        currentLocation = location
+        currentStartPositionSeconds = startPositionSeconds
+        currentDeclaredMimeType = declaredMimeType
+        this.allowHlsFallback = allowHlsFallback
+        hlsFallbackAttempted = false
+        _playInternal(location, startPositionSeconds, declaredMimeType)
+    }
+
+    private fun _playInternal(
+        location: String,
+        startPositionSeconds: Float,
+        declaredMimeType: String?,
+        forcedMimeType: String? = null,
+    ) {
         // recycling must not report the stopped sentinel: senders poll right after /play
         _stopInternal(reportStopped = false)
         val p = ExoPlayer.Builder(context, renderersFactory).build().also {
@@ -108,7 +148,17 @@ class NetworkMediaPlayer(private val context: Context) {
             pendingSurfaceHolder?.let(it::setVideoSurfaceHolder)
         }
         player = p
-        p.setMediaItem(MediaItem.fromUri(location), (startPositionSeconds * 1000).toLong())
+        val resolvedMimeType = forcedMimeType ?: MediaMimeResolver.resolve(location, declaredMimeType)
+        val mediaItem = MediaItem.Builder()
+            .setUri(location)
+            .apply { resolvedMimeType?.let(::setMimeType) }
+            .build()
+        Log.i(
+            TAG,
+            "Preparing network media: mime=${resolvedMimeType ?: "auto"} " +
+                "location=${location.substringBefore('?').substringBefore('#')}",
+        )
+        p.setMediaItem(mediaItem, (startPositionSeconds * 1000).toLong())
         p.playWhenReady = true
         p.prepare()
         onPlaybackInfo?.invoke(PlaybackSnapshot(startPositionSeconds, 0f, 0f, false, true))
@@ -222,6 +272,10 @@ class NetworkMediaPlayer(private val context: Context) {
     private fun runOnMain(action: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) action() else mainHandler.post(action)
     }
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun isUnrecognizedInput(error: Throwable): Boolean =
+        generateSequence(error) { it.cause }.any { it is UnrecognizedInputFormatException }
 
     companion object {
         private const val TAG = "NetworkMediaPlayer"

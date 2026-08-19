@@ -107,9 +107,25 @@ struct raop_rtp_mirror_s {
 
     unsigned short mirror_data_lport;
 
-     /* switch for displaying client FPS data */
-     uint8_t show_client_FPS_data;
+    /* switch for displaying client FPS data */
+    uint8_t show_client_FPS_data;
+
+    /* Never use the object address as a stream identity: allocators may reuse it
+     * while a previous callback is still queued on the Android main thread. */
+    uint64_t stream_token;
 };
+
+static uint64_t next_stream_token = 0;
+
+static uint64_t
+raop_rtp_mirror_next_stream_token(void)
+{
+    /* This library creates mirror sessions from the serialized RTSP handler.
+     * The compiler builtin keeps the identity robust if another transport
+     * thread starts a session at the same time, without adding a global mutex. */
+    uint64_t token = __atomic_add_fetch(&next_stream_token, 1, __ATOMIC_RELAXED);
+    return token != 0 ? token : __atomic_add_fetch(&next_stream_token, 1, __ATOMIC_RELAXED);
+}
 
 static int
 raop_rtp_mirror_parse_remote(raop_rtp_mirror_t *raop_rtp_mirror, const char *remote, int remotelen)
@@ -161,6 +177,7 @@ raop_rtp_mirror_t *raop_rtp_mirror_init(logger_t *logger, raop_callbacks_t *call
     raop_rtp_mirror->running = 0;
     raop_rtp_mirror->joined = 1;
     raop_rtp_mirror->flush = NO_FLUSH;
+    raop_rtp_mirror->stream_token = 0;
 
     MUTEX_CREATE(raop_rtp_mirror->run_mutex);
     return raop_rtp_mirror;
@@ -554,7 +571,18 @@ raop_rtp_mirror_thread(void *arg)
                     prepend_sps_pps =  false;
                 }
 
-                raop_rtp_mirror->callbacks.video_process(raop_rtp_mirror->callbacks.cls, raop_rtp_mirror->ntp, &video_data);
+                if (raop_rtp_mirror->callbacks.video_process_ex) {
+                    raop_rtp_mirror->callbacks.video_process_ex(
+                        raop_rtp_mirror->callbacks.cls,
+                        raop_rtp_mirror->stream_token,
+                        raop_rtp_mirror->ntp,
+                        &video_data);
+                } else {
+                    raop_rtp_mirror->callbacks.video_process(
+                        raop_rtp_mirror->callbacks.cls,
+                        raop_rtp_mirror->ntp,
+                        &video_data);
+                }
                 free(payload_out);
                 break;
             case 0x01:
@@ -607,8 +635,21 @@ raop_rtp_mirror_thread(void *arg)
                            " %f != width_source = %f, height_source = %f", width_0, height_0, width_source, height_source);
                 }
                 logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "raop_rtp_mirror: unidentified extra header data  %f, %f", unknown_w, unknown_h);
-                if (raop_rtp_mirror->callbacks.video_report_size) {
-                    raop_rtp_mirror->callbacks.video_report_size(raop_rtp_mirror->callbacks.cls, &width_source, &height_source, &width, &height);
+                if (raop_rtp_mirror->callbacks.video_report_size_ex) {
+                    raop_rtp_mirror->callbacks.video_report_size_ex(
+                        raop_rtp_mirror->callbacks.cls,
+                        raop_rtp_mirror->stream_token,
+                        &width_source,
+                        &height_source,
+                        &width,
+                        &height);
+                } else if (raop_rtp_mirror->callbacks.video_report_size) {
+                    raop_rtp_mirror->callbacks.video_report_size(
+                        raop_rtp_mirror->callbacks.cls,
+                        &width_source,
+                        &height_source,
+                        &width,
+                        &height);
                 }
                 logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "raop_rtp_mirror width_source = %f height_source = %f width = %f height = %f",
                            width_source, height_source, width, height);
@@ -841,7 +882,10 @@ raop_rtp_mirror_thread(void *arg)
     MUTEX_LOCK(raop_rtp_mirror->run_mutex);
     raop_rtp_mirror->running = false;
     MUTEX_UNLOCK(raop_rtp_mirror->run_mutex);
-    if (raop_rtp_mirror->callbacks.mirror_video_running) {
+    if (raop_rtp_mirror->callbacks.mirror_video_running_ex) {
+        raop_rtp_mirror->callbacks.mirror_video_running_ex(
+            raop_rtp_mirror->callbacks.cls, raop_rtp_mirror->stream_token, false);
+    } else if (raop_rtp_mirror->callbacks.mirror_video_running) {
         raop_rtp_mirror->callbacks.mirror_video_running(raop_rtp_mirror->callbacks.cls, false);
     }
 
@@ -922,7 +966,13 @@ raop_rtp_mirror_start(raop_rtp_mirror_t *raop_rtp_mirror, unsigned short *mirror
     /* Create the thread and initialize running values */
     raop_rtp_mirror->running = 1;
     raop_rtp_mirror->joined = 0;
-    if (raop_rtp_mirror->callbacks.mirror_video_running) {
+    /* A single RTSP connection can tear down and start mirror transport again;
+     * each run must receive a new identity even when the object is reused. */
+    raop_rtp_mirror->stream_token = raop_rtp_mirror_next_stream_token();
+    if (raop_rtp_mirror->callbacks.mirror_video_running_ex) {
+        raop_rtp_mirror->callbacks.mirror_video_running_ex(
+            raop_rtp_mirror->callbacks.cls, raop_rtp_mirror->stream_token, true);
+    } else if (raop_rtp_mirror->callbacks.mirror_video_running) {
         raop_rtp_mirror->callbacks.mirror_video_running(raop_rtp_mirror->callbacks.cls, true);
     }
 

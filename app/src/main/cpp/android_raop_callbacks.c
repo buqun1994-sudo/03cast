@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <stdint.h>
 #include <android/log.h>
 #include "android_raop_callbacks.h"
 #include "audio_engine.h"
@@ -49,12 +50,13 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->playback_ready = 0;
 
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
-    ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
+    ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "(J[BJZ)V");
     ctx->on_audio_format = (*env)->GetMethodID(env, cls, "onAudioFormat", "(IIZ)V");
-    ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFF)V");
+    ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(JFFFF)V");
     ctx->on_volume_change = (*env)->GetMethodID(env, cls, "onVolumeChange", "(F)V");
     ctx->on_client_volume = (*env)->GetMethodID(env, cls, "onClientVolume", "()F");
     ctx->on_audio_teardown = (*env)->GetMethodID(env, cls, "onAudioTeardown", "()V");
+    ctx->on_mirror_video_running = (*env)->GetMethodID(env, cls, "onMirrorVideoRunning", "(JZ)V");
     ctx->on_conn_init = (*env)->GetMethodID(env, cls, "onConnectionInit", "()V");
     ctx->on_conn_destroy = (*env)->GetMethodID(env, cls, "onConnectionDestroy", "()V");
     ctx->on_conn_reset = (*env)->GetMethodID(env, cls, "onConnectionReset", "(I)V");
@@ -63,7 +65,6 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->on_coverart = (*env)->GetMethodID(env, cls, "onCoverArt", "([B)V");
     ctx->on_progress = (*env)->GetMethodID(env, cls, "onProgress", "(JJJ)V");
     ctx->on_dacp_id = (*env)->GetMethodID(env, cls, "onDacpId", "(Ljava/lang/String;Ljava/lang/String;)V");
-    ctx->on_audio_only = (*env)->GetMethodID(env, cls, "onAudioOnly", "(Z)V");
     ctx->on_video_play = (*env)->GetMethodID(env, cls, "onVideoPlay", "(Ljava/lang/String;F)V");
     ctx->on_video_scrub = (*env)->GetMethodID(env, cls, "onVideoScrub", "(F)V");
     ctx->on_video_rate = (*env)->GetMethodID(env, cls, "onVideoRate", "(F)V");
@@ -109,7 +110,8 @@ static void _audio_process(void *cls, raop_ntp_t *ntp, audio_decode_struct *data
                         (int)data->ct, (int64_t)data->ntp_time_local);
 }
 
-static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
+static void _video_process_with_token(void *cls, uint64_t stream_token,
+                                      raop_ntp_t *ntp, video_decode_struct *data) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
     if (!env || !data->data || data->data_len <= 0) return;
@@ -117,8 +119,21 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
     jbyteArray arr = (*env)->NewByteArray(env, data->data_len);
     (*env)->SetByteArrayRegion(env, arr, 0, data->data_len, (jbyte *)data->data);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data,
-                           arr, (jlong)data->ntp_time_local, (jboolean)data->is_h265);
+                           (jlong)stream_token, arr,
+                           (jlong)data->ntp_time_local, (jboolean)data->is_h265);
     (*env)->DeleteLocalRef(env, arr);
+}
+
+/* raop_init still requires the legacy callback slot to be populated. The
+ * mirror transport prefers the tokenized extension below, while this wrapper
+ * keeps the upstream callback contract valid for validation and fallback. */
+static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
+    _video_process_with_token(cls, 0, ntp, data);
+}
+
+static void _video_process_ex(void *cls, uint64_t stream_token,
+                              raop_ntp_t *ntp, video_decode_struct *data) {
+    _video_process_with_token(cls, stream_token, ntp, data);
 }
 
 static void _conn_init(void *cls) {
@@ -167,12 +182,26 @@ static void _audio_get_format(void *cls, unsigned char *ct, unsigned short *spf,
                            (jint)*ct, (jint)*spf, (jboolean)*usingScreen);
 }
 
-static void _video_report_size(void *cls, float *w_src, float *h_src, float *w, float *h) {
+static void _video_report_size_with_token(void *cls, uint64_t stream_token,
+                                           float *w_src, float *h_src,
+                                           float *w, float *h) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
+    LOGI("AirPlay RTP video size: source=%0.0fx%0.0f display=%0.0fx%0.0f",
+         *w_src, *h_src, *w, *h);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_size,
-                           (jfloat)*w_src, (jfloat)*h_src, (jfloat)*w, (jfloat)*h);
+                           (jlong)stream_token, (jfloat)*w_src, (jfloat)*h_src,
+                           (jfloat)*w, (jfloat)*h);
+}
+
+static void _video_report_size(void *cls, float *w_src, float *h_src, float *w, float *h) {
+    _video_report_size_with_token(cls, 0, w_src, h_src, w, h);
+}
+
+static void _video_report_size_ex(void *cls, uint64_t stream_token,
+                                  float *w_src, float *h_src, float *w, float *h) {
+    _video_report_size_with_token(cls, stream_token, w_src, h_src, w, h);
 }
 
 static void _display_pin(void *cls, char *pin) {
@@ -269,13 +298,14 @@ static void _audio_set_progress(void *cls, uint32_t *start, uint32_t *curr, uint
                            (jlong)*start, (jlong)*curr, (jlong)*end);
 }
 
-static void _mirror_video_running(void *cls, bool running) {
+static void _mirror_video_running(void *cls, uint64_t stream_token, bool running) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
-    LOGI("mirror running: %d", running);
-    /* audio-only = mirror NOT running */
-    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_only, (jboolean)!running);
+    LOGI("mirror running: %d stream_token=%llu", running,
+         (unsigned long long)stream_token);
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_mirror_video_running,
+                           (jlong)stream_token, (jboolean)running);
 }
 static void _register_client(void *cls, const char *device_id, const char *pk_str, const char *name) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
@@ -386,6 +416,7 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
 
     cbs->audio_process = _audio_process;
     cbs->video_process = _video_process;
+    cbs->video_process_ex = _video_process_ex;
     cbs->video_pause = _video_pause;
     cbs->video_resume = _video_resume;
     cbs->conn_feedback = _conn_feedback;
@@ -405,7 +436,8 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
     cbs->audio_set_progress = _audio_set_progress;
     cbs->audio_get_format = _audio_get_format;
     cbs->video_report_size = _video_report_size;
-    cbs->mirror_video_running = _mirror_video_running;
+    cbs->video_report_size_ex = _video_report_size_ex;
+    cbs->mirror_video_running_ex = _mirror_video_running;
     cbs->display_pin = _display_pin;
     cbs->video_set_codec = _video_set_codec;
     cbs->on_video_play = _video_play;

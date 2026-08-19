@@ -12,7 +12,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.view.Gravity
-import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.ViewGroup
@@ -58,7 +57,7 @@ open class MainActivity : AppCompatActivity() {
     private var lastModeKey: Triple<CastPhase, CastProtocol?, CastContentKind>? = null
     private var controlsVisible = true
     private var seeking = false
-    private var mirrorSurface: Surface? = null
+    private var mirrorSurfaceHolder: SurfaceHolder? = null
     private var mediaSurfaceHolder: SurfaceHolder? = null
     private var currentMirrorAspect = 16f / 9f
     private var currentMediaAspect = 16f / 9f
@@ -132,6 +131,12 @@ open class MainActivity : AppCompatActivity() {
         configureAgreementQrCode()
         configureActions()
         configureSurfaces()
+        binding.root.addOnLayoutChangeListener { _, left, top, right, bottom,
+                                                  oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                refitVisibleSurfaces()
+            }
+        }
         configureBack()
         renderSettingsSection(selectedSettingsSection)
         renderDrivingGuard(isDrivingPlaybackGuardEnabled())
@@ -328,18 +333,28 @@ open class MainActivity : AppCompatActivity() {
 
     private fun configureSurfaces() {
         binding.mirrorSurface.setZOrderOnTop(true)
+        // Keep the window opaque and let the codec choose its implementation
+        // buffer format. Forcing RGBX makes the Qualcomm decoder negotiate an
+        // RGB producer buffer instead of its native YUV/HWC path.
         binding.mirrorSurface.holder.setFormat(PixelFormat.OPAQUE)
         binding.mirrorSurface.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
-                mirrorSurface = holder.surface
-                castService?.setMirrorSurface(holder.surface)
+                mirrorSurfaceHolder = holder
+                val frame = holder.surfaceFrame
+                castService?.setMirrorSurface(holder, frame.width(), frame.height())
             }
 
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+                // A fullscreen handoff can resize the same native window
+                // without recreating it. Re-advertise the holder so a new
+                // Activity surface can replace the old codec output target.
+                if (holder.surface.isValid) castService?.setMirrorSurface(holder, width, height)
+                refitVisibleSurfaces()
+            }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
-                castService?.clearMirrorSurface(holder.surface)
-                if (mirrorSurface === holder.surface) mirrorSurface = null
+                castService?.clearMirrorSurface(holder)
+                if (mirrorSurfaceHolder === holder) mirrorSurfaceHolder = null
             }
         })
         binding.mediaSurface.setZOrderOnTop(true)
@@ -350,7 +365,10 @@ open class MainActivity : AppCompatActivity() {
                 castService?.setMediaSurface(holder)
             }
 
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+                if (holder.surface.isValid) castService?.setMediaSurface(holder)
+                refitVisibleSurfaces()
+            }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
                 castService?.clearMediaSurface(holder)
@@ -360,7 +378,12 @@ open class MainActivity : AppCompatActivity() {
     }
 
     private fun attachSurfaces(service: CastService) {
-        mirrorSurface?.takeIf { it.isValid }?.let(service::setMirrorSurface)
+        mirrorSurfaceHolder
+            ?.takeIf { it.surface.isValid }
+            ?.let { holder ->
+                val frame = holder.surfaceFrame
+                service.setMirrorSurface(holder, frame.width(), frame.height())
+            }
         mediaSurfaceHolder
             ?.takeIf { it.surface.isValid }
             ?.let(service::setMediaSurface)
@@ -462,8 +485,7 @@ open class MainActivity : AppCompatActivity() {
 
         updateControlsOverlayVisibility(active)
 
-        if (binding.mirrorSurface.isVisible) fitSurface(binding.mirrorSurface, currentMirrorAspect)
-        if (binding.mediaSurface.isVisible) fitSurface(binding.mediaSurface, currentMediaAspect)
+        refitVisibleSurfaces()
     }
 
     private fun handleSessionEndEvent(event: CastSessionEndEvent?) {
@@ -521,6 +543,11 @@ open class MainActivity : AppCompatActivity() {
                 topMargin = (availableHeight - height) / 2
             }
         }
+    }
+
+    private fun refitVisibleSurfaces() {
+        if (binding.mirrorSurface.isVisible) fitSurface(binding.mirrorSurface, currentMirrorAspect)
+        if (binding.mediaSurface.isVisible) fitSurface(binding.mediaSurface, currentMediaAspect)
     }
 
     private fun closeReceiver() {

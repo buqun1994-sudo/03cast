@@ -1,12 +1,14 @@
 package com.tcrrry.desktopcast.bridge
 
 interface RaopCallbackHandler {
-    fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean)
+    fun onVideoData(streamToken: Long, data: ByteArray, ntpTimeNs: Long, isH265: Boolean)
     fun onAudioFormat(ct: Int, spf: Int, usingScreen: Boolean)
-    fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float)
+    fun onVideoSize(streamToken: Long, srcW: Float, srcH: Float, w: Float, h: Float)
     fun onVolumeChange(volume: Float)
     fun onClientVolume(): Float
     fun onAudioTeardown()
+    /** Native RTP mirror transport entered or left its active run state. */
+    fun onMirrorVideoRunning(streamToken: Long, running: Boolean)
     fun onConnectionInit()
     fun onConnectionDestroy()
     fun onConnectionReset(reason: Int)
@@ -15,7 +17,6 @@ interface RaopCallbackHandler {
     fun onCoverArt(data: ByteArray)
     fun onProgress(start: Long, curr: Long, end: Long)
     fun onDacpId(dacpId: String, activeRemote: String)
-    fun onAudioOnly(audioOnly: Boolean)
     // video (hls), distinct from mirroring and raop audio
     fun onVideoPlay(location: String, startPositionSeconds: Float)
     fun onVideoScrub(positionSeconds: Float)

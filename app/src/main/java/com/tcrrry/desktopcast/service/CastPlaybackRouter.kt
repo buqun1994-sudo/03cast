@@ -4,13 +4,13 @@ import android.content.Context
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
-import android.view.Surface
 import android.view.SurfaceHolder
 import androidx.media3.common.Player
 import com.tcrrry.desktopcast.bridge.RaopCallbackHandler
 import com.tcrrry.desktopcast.dlna.DlnaPlaybackController
 import com.tcrrry.desktopcast.dlna.DlnaPlaybackSnapshot
 import com.tcrrry.desktopcast.renderer.AudioConfig
+import com.tcrrry.desktopcast.renderer.MirrorDecoderProfile
 import com.tcrrry.desktopcast.renderer.NetworkMediaPlayer
 import com.tcrrry.desktopcast.renderer.PlaybackSnapshot
 import com.tcrrry.desktopcast.renderer.VideoRenderer
@@ -97,9 +97,13 @@ class CastPlaybackRouter(
         airPlayAdapter.attach(handle, audioConfig)
     }
 
-    fun setMirrorSurface(surface: Surface) = videoRenderer.setSurface(surface)
+    internal fun configureMirrorDecoder(profile: MirrorDecoderProfile) =
+        videoRenderer.configureDecoderProfile(profile)
 
-    fun clearMirrorSurface(surface: Surface) = videoRenderer.clearSurface(surface)
+    fun setMirrorSurface(holder: SurfaceHolder, bufferWidth: Int = 0, bufferHeight: Int = 0) =
+        videoRenderer.setSurface(holder, bufferWidth, bufferHeight)
+
+    fun clearMirrorSurface(holder: SurfaceHolder) = videoRenderer.clearSurface(holder)
 
     fun setMediaSurface(holder: SurfaceHolder) = networkPlayer.setSurface(holder)
 
@@ -175,6 +179,32 @@ class CastPlaybackRouter(
         val previousProtocol = sessionState.value.protocol
         val lease = coordinator.beginSession(protocol) ?: return null
         releaseProtocolOutput(previousProtocol)
+        clearStaleNetworkSession()
+        return lease
+    }
+
+    /**
+     * Claims a fresh AirPlay generation for a newly started RTP mirror stream.
+     * The stream-start callback is emitted by the native connection that must
+     * remain alive, so the normal AirPlay takeover path (which drops every
+     * native connection) cannot be used when the previous owner is also
+     * AirPlay.
+     */
+    internal fun beginAirPlayMirrorSession(preserveAudio: Boolean): CastSessionLease? {
+        checkOnMainThread()
+        if (drivingPlaybackInterlock.isBlocked) return null
+        cancelPendingRemoteDisconnect()
+        if (preserveAudio &&
+            sessionState.value.protocol == CastProtocol.AIRPLAY &&
+            sessionState.value.content == CastContentKind.AUDIO
+        ) {
+            return coordinator.leaseFor(CastProtocol.AIRPLAY)
+        }
+        if (sessionState.value.protocol != CastProtocol.AIRPLAY) {
+            return beginSession(CastProtocol.AIRPLAY)
+        }
+        val lease = coordinator.beginSession(CastProtocol.AIRPLAY) ?: return null
+        airPlayAdapter.releaseOutput()
         clearStaleNetworkSession()
         return lease
     }
@@ -264,13 +294,15 @@ class CastPlaybackRouter(
         location: String,
         startPositionSeconds: Float,
         observer: NetworkPlaybackObserver,
+        declaredMimeType: String? = null,
+        allowHlsFallback: Boolean = false,
     ) {
         checkOnMainThread()
         if (!isCurrent(lease)) return
         stopNetworkPlayback()
         networkSession = NetworkPlaybackSession(lease, observer)
         mutableMediaAspect.value = 16f / 9f
-        networkPlayer.play(location, startPositionSeconds)
+        networkPlayer.play(location, startPositionSeconds, declaredMimeType, allowHlsFallback)
     }
 
     internal fun stopNetworkPlayback(lease: CastSessionLease) {

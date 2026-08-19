@@ -18,6 +18,7 @@
 #ifndef RAOP_H
 #define RAOP_H
 
+#include <stdint.h>
 #include "dnssd.h"
 #include "stream.h"
 #include "raop_ntp.h"
@@ -97,6 +98,12 @@ struct raop_callbacks_s {
     void  (*audio_get_format)(void *cls, unsigned char *ct, unsigned short *spf, bool *usingScreen, bool *isMedia, uint64_t *audioFormat);
     void  (*video_report_size)(void *cls, float *width_source, float *height_source, float *width, float *height);
     void  (*mirror_video_running)(void *cls, bool is_running);
+    /* Optional extension carrying a monotonic native mirror stream identity. */
+    void  (*mirror_video_running_ex)(void *cls, uint64_t stream_token, bool is_running);
+    /* Tokenized mirror callbacks let the receiver discard late packets from a
+     * previous stream before they reach its decoder or layout state. */
+    void  (*video_process_ex)(void *cls, uint64_t stream_token, raop_ntp_t *ntp, video_decode_struct *data);
+    void  (*video_report_size_ex)(void *cls, uint64_t stream_token, float *width_source, float *height_source, float *width, float *height);
     void  (*report_client_request) (void *cls, char *deviceid, char *model, char *name, bool *admit);
     void  (*display_pin) (void *cls, char * pin);
     void  (*register_client) (void *cls, const char *device_id, const char *pk_str, const char *name);
@@ -129,6 +136,7 @@ RAOP_API void raop_set_log_level(raop_t *raop, int level);
 RAOP_API void raop_set_log_callback(raop_t *raop, raop_log_callback_t callback, void *cls);
 RAOP_API int raop_set_plist(raop_t *raop, const char *plist_item, const int value);
 RAOP_API void raop_set_port(raop_t *raop, unsigned short port);
+RAOP_API void raop_set_display_uuid(raop_t *raop, const char *uuid);
 RAOP_API void raop_set_lang(raop_t *raop, const char *lang);
 RAOP_API void raop_set_udp_ports(raop_t *raop, unsigned short port[3]);
 RAOP_API void raop_set_tcp_ports(raop_t *raop, unsigned short port[2]);

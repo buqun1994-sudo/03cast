@@ -1,5 +1,6 @@
 package com.tcrrry.desktopcast.dlna
 
+import androidx.media3.common.MimeTypes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,7 +22,28 @@ class DlnaSoapDispatcherTest {
         assertEquals("测试影片", player.state.media?.title)
         assertEquals(DlnaMediaKind.VIDEO, player.state.media?.kind)
         assertEquals("http://host/video.mp4", player.state.media?.uri)
+        assertEquals(MimeTypes.VIDEO_MP4, player.state.media?.mimeType)
         assertTrue("SetAVTransportURIResponse" in response)
+    }
+
+    @Test
+    fun preservesHlsProtocolInfoForPlayback() {
+        val player = FakePlayer()
+        val metadata = """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"><item><upnp:class xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">object.item.videoItem</upnp:class><res protocolInfo="http-get:*:application/vnd.apple.mpegurl:*">https://media.example/opaque?id=1</res></item></DIDL-Lite>"""
+
+        DlnaSoapDispatcher(player).dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope(
+                "SetAVTransportURI",
+                "<InstanceID>0</InstanceID><CurrentURI>https://fallback.example/video</CurrentURI>" +
+                    "<CurrentURIMetaData>${DlnaXml.escape(metadata)}</CurrentURIMetaData>",
+            ),
+        )
+
+        // The DLNA parser preserves the sender's protocolInfo verbatim;
+        // MediaMimeResolver normalizes it at the Media3 boundary.
+        assertEquals("application/vnd.apple.mpegurl", player.state.media?.mimeType)
+        assertEquals(DlnaMediaKind.VIDEO, player.state.media?.kind)
     }
 
     @Test

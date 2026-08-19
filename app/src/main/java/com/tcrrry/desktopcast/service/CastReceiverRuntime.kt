@@ -11,9 +11,12 @@ import com.tcrrry.desktopcast.discovery.NsdServiceManager
 import com.tcrrry.desktopcast.dlna.DlnaRenderer
 import com.tcrrry.desktopcast.realDisplaySize
 import com.tcrrry.desktopcast.renderer.VideoRenderer
+import com.tcrrry.desktopcast.renderer.codecSummaryForRuntime
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
+import java.util.UUID
 
 /**
  * Owns the protocol listeners and their platform resources. It deliberately
@@ -104,6 +107,7 @@ class CastReceiverRuntime(
         )
         check(handle != 0L) { "AirPlay native initialization failed" }
         nativeHandle = handle
+        NativeBridge.nativeSetDisplayUuid(handle, displayUuid(hardwareAddress))
 
         NativeBridge.nativeSetDefaultStreamValues(
             audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: 0,
@@ -111,20 +115,32 @@ class CastReceiverRuntime(
         )
         playback.attachAirPlay(handle, readAudioConfig(preferences))
 
-        val supportsH265 = VideoRenderer.supportsH265()
-        NativeBridge.nativeSetH265Enabled(handle, supportsH265)
+        val panel = context.realDisplaySize()
+        val decoderProfile = VideoRenderer.resolveMirrorDisplayProfile(
+            width = panel.first,
+            height = panel.second,
+            displayRefreshHz = DISPLAY_REFRESH_HZ,
+        )
+        playback.configureMirrorDecoder(decoderProfile)
+        NativeBridge.nativeSetH265Enabled(handle, decoderProfile.supportsH265)
         NativeBridge.nativeSetCodecs(handle, alac = true, aac = true)
         NativeBridge.nativeSetHlsEnabled(handle, true)
         NativeBridge.nativeSetAudioEnabled(handle, true)
-        NativeBridge.nativeSetPlist(handle, "maxFPS", MAX_FPS)
         NativeBridge.nativeSetPlist(handle, "overscanned", 0)
-
-        val panel = context.realDisplaySize()
-        val limit = VideoRenderer.maxSupportedResolution(supportsH265)
-        val width = panel.first.coerceAtMost(limit.first)
-        val height = panel.second.coerceAtMost(limit.second)
-        playback.videoRenderer.setResolution(width, height)
-        NativeBridge.nativeSetDisplaySize(handle, width, height, MAX_FPS)
+        NativeBridge.nativeSetPlist(handle, "maxFPS", decoderProfile.advertisedMaxFrameRate)
+        // Advertise the physical panel to AirPlay so senders do not fall back
+        // to a small compatibility mode. Decoder dimensions come only from the
+        // current RTP stream; seeding them here would leak the previous
+        // sender's shape into the next mirror session.
+        NativeBridge.nativeSetDisplaySize(handle, panel.first, panel.second, DISPLAY_REFRESH_HZ)
+        Log.i(
+            TAG,
+            "AirPlay display profile: panel=${panel.first}x${panel.second}, " +
+                "advertised=${panel.first}x${panel.second}, " +
+                "maxFPS=${decoderProfile.advertisedMaxFrameRate}, " +
+                "h265=${decoderProfile.supportsH265}, " +
+                "codecCandidates=${decoderProfile.codecSummaryForRuntime()}",
+        )
 
         val port = NativeBridge.nativeStart(handle, AIRPLAY_PORT)
         check(port > 0) { "AirPlay TCP $AIRPLAY_PORT failed to bind on ${address.hostAddress}" }
@@ -203,9 +219,21 @@ class CastReceiverRuntime(
     private fun usableMac(value: ByteArray?): Boolean =
         value != null && value.size == 6 && value.any { it != 0.toByte() }
 
+    private fun displayUuid(hardwareAddress: ByteArray): String {
+        preferences.getString(Prefs.AIRPLAY_DISPLAY_UUID, null)
+            ?.let { saved -> runCatching { UUID.fromString(saved) }.getOrNull()?.let { return it.toString() } }
+        val generated = UUID.nameUUIDFromBytes(
+            ("desktopcast-display-v2:" + hardwareAddress.joinToString("") {
+                "%02x".format(it.toInt() and 0xff)
+            }).toByteArray(StandardCharsets.US_ASCII),
+        ).toString()
+        preferences.edit().putString(Prefs.AIRPLAY_DISPLAY_UUID, generated).apply()
+        return generated
+    }
+
     private companion object {
         const val TAG = "CastReceiverRuntime"
         const val AIRPLAY_PORT = 7000
-        const val MAX_FPS = 60
+        const val DISPLAY_REFRESH_HZ = 60
     }
 }

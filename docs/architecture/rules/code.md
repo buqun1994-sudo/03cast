@@ -23,10 +23,11 @@
 1. 触发条件：目标车机上网络视频或 AirPlay 镜像已经有声音、进度持续前进、硬件解码器持续输出帧，但实体屏幕的视频区域保持纯黑。
 2. 首先检查 `SurfaceFlinger` 的视频层合成类型。若高通解码器输出 UBWC 私有 YUV 缓冲，而视频层处于应用窗口下方并被标记为 `Client`，不得继续把问题归因于协议、媒体地址、HDR 或解码失败。
 3. 在 `S56_HQX`、Android 9、`msmnile` 主链上，网络视频与镜像视频必须直接输出到独立 `SurfaceView`；表面使用不透明像素格式并置于应用窗口上方，使视频缓冲保持 `Device/HWC` 合成。禁止默认改用 `TextureView`、OpenGL 中转或 CPU 拷贝来读取厂商 UBWC 缓冲。
-4. 置顶视频表面会覆盖同一 Activity 中与其重叠的普通 View。播放控件、状态文字和关闭入口必须放在视频矩形之外，或在非播放状态隐藏视频表面；若产品需要覆盖视频，必须使用不申请悬浮窗权限的公开应用子窗口（如 attached `PopupWindow`），不得依赖同一窗口的普通 View 叠加。
-5. 表面销毁、协议切换或窗口关闭时，必须先停止并释放对应播放器 / 解码器，再释放表面引用；任一时刻只允许当前活动会话向可见视频表面输出。
-6. 验证方式：普通 SDR H.264 视频必须在实体屏幕出现连续动态画面；`SurfaceFlinger` 中活动视频层应为 `Device` 合成且缓冲持续入队。系统截图无法捕获硬件视频层，截图黑色不得作为失败证据。
-7. 适用边界：本规则只约束当前 Android 9 高通车机的厂商显示栈。HDR、DRM、损坏媒体和发送端只输出音频必须分别验证，不得由 SDR 合成成功直接推定。
+4. 解码器输出尺寸与窗口显示尺寸必须分开管理。编码帧到达后，使用 `SurfaceHolder.setFixedSize(encodedWidth, encodedHeight)` 设置 BufferQueue 的 producer geometry，并等待匹配的 `surfaceChanged` 回调后再 configure / rebind codec；Activity 只按源比例调整 SurfaceView 的显示矩形，不能用浮窗的 `1230x810` 等布局尺寸配置 codec。停止播放或销毁表面前恢复 `setSizeFromLayout()`，避免下一代媒体继承旧 buffer 尺寸。
+5. 置顶视频表面会覆盖同一 Activity 中与其重叠的普通 View。播放控件、状态文字和关闭入口必须放在视频矩形之外，或在非播放状态隐藏视频表面；若产品需要覆盖视频，必须使用不申请悬浮窗权限的公开应用子窗口（如 attached `PopupWindow`），不得依赖同一窗口的普通 View 叠加。
+6. 表面销毁、协议切换或窗口关闭时，必须先停止并释放对应播放器 / 解码器，再释放表面引用；任一时刻只允许当前活动会话向可见视频表面输出。Android 9 的 `KEY_OPERATING_RATE`、低延迟和丢帧提示属于可选能力，必须按平台 / 厂商探针启用；若日志显示 vendor 不支持，默认格式不得携带这些键。
+7. 验证方式：普通 SDR H.264 视频必须在实体屏幕出现连续动态画面；日志应同时出现编码尺寸、Surface buffer geometry、实际 codec 名称和首个解码输出；`SurfaceFlinger` 中活动视频层应为 `Device` 合成且缓冲持续入队。系统截图无法捕获硬件视频层，截图黑色不得作为失败证据。
+8. 适用边界：本规则只约束当前 Android 9 高通车机的厂商显示栈。HDR、DRM、损坏媒体和发送端只输出音频必须分别验证，不得由 SDR 合成成功直接推定。
 
 ## 4. 单会话 owner 与协议适配器规则
 
@@ -64,3 +65,14 @@
 4. 媒体控制必须由一个显隐状态统一管理顶部结束投屏、底部左侧播放键和底部时间轴；视频、镜像和图片态轻触显示、静置 `3 s` 同时隐藏，音频态保持可见。公开 Media3 控件只能作为既有 Router 的控制桥，不得成为第二套播放器状态机；顶部和底部不得使用整条黑色半透明遮罩。
 5. 用户协议地址必须由明确构建类型注入：Debug 使用 `https://staging.9studio.fun/icar03/terms`，Release 使用 `https://9.9studio.fun/icar03/terms`。二维码在客户端离线生成，不用版本号推断环境，不从云端运行时获取地址。
 6. 关闭应用窗口后应停止 DLNA / AirPlay 广播和监听；本项目不在窗口关闭后保持后台发现，不通过网络报文自动启动 Activity。若未来改变该边界，必须单独更新权限、生命周期和验收文档。
+
+## 8. AirPlay 显示协商与网络媒体格式边界
+
+1. 触发条件：AirPlay 发送端把接收器协商成异常小的显示尺寸，或 DLNA 媒体 URL 没有容器后缀、实际为 HLS 而 Media3 报 `UnrecognizedInputFormatException`。
+2. AirPlay `/info` 对外宣告的 `width / height / widthPixels / heightPixels / edid` 必须描述目标物理面板；`refreshRate` 表示面板刷新率，`maxFPS` 表示接收端可稳定承载的编码帧率，二者必须分别维护。`maxFPS` 必须同时受实际硬件解码能力和物理刷新率约束；目标 `S56_HQX` 的 1080p H.264 / HEVC 硬件能力高于 `60 fps`，因此当前对外上限为 `60`，但发送端可以按网络与内容选择更低帧率。解码器尺寸上限只用于本地解码器启动和失败诊断，不得反向缩小接收器的显示能力声明。显示 `uuid` 必须按接收器硬件首次生成并持久化，不能在多台设备间复用固定值，也不能因网络接口切换而变化。
+3. 能力宣告和实际解码必须复用同一次 `REGULAR_CODECS` 候选快照，不得分别依赖 codec 列表的首个条目。Android 9 厂商 codec 的静态 `VideoCapabilities`、`colorFormats` 和帧率范围只作为排序与诊断信息，不能作为 Surface 解码硬门禁；目标车机已取证的 `OMX.qcom.*` 即使报告 `256x256` 或未列出 `COLOR_FormatSurface`，也必须保留并用真实 `MediaCodec.configure(format, Surface)` / `start()` 验证。Android 9 的 `OMX.qcom.*` 按硬件解码器识别，`OMX.google.* / c2.android.*` 按软件解码器识别；实际启动按同一快照逐个使用 codec 名称尝试硬件候选，必要时去除可选实时参数后重试。H.265 只在存在硬件 HEVC 候选时对外开启；对外 `maxFPS` 由物理面板刷新率和候选吞吐的已知上限取值，静态帧率未知时不得把未知误写成 `30`。软件兼容路径仅允许最长边不超过 `1280`、最短边不超过 `720`；在实际输入帧率尚未观测时可以启动小流，观测到超过 `30 fps` 后必须停止软件路径并保留可观测错误；1080p 镜像硬件启动失败时禁止静默落入软件解码。
+4. AirPlay RTP 回调中的编码帧尺寸同时用于配置解码器和 SurfaceView 的像素比例；源桌面尺寸只作为诊断信息，不能在 UI 层替代编码帧比例或凭固定 `16:9` 覆盖发送端比例。编码尺寸变化后必须等待下一关键帧重建解码器。
+5. 镜像开始 / 结束必须使用 native `mirror_video_running` 生命周期作为权威会话信号；镜像开始、尺寸、视频帧和结束回调都必须携带单调递增的原生镜像流令牌，旧代次事件不得改写新会话。开始与尺寸控制回调必须在返回 native 线程前完成主线程会话归并，确保首个携带 SPS/PPS/VPS 的访问单元不会抢跑；视频帧只接受当前 token。尺寸头先到时不得回退到上一代比例，必须先激活或缓存该 token 后再配置解码器。通用 HTTP 连接销毁只能作为可取消的短暂确认兜底，不能用连接计数推断发送端仍在播放。新镜像开始和输出释放必须清空旧尺寸 / 比例并丢弃迟到帧；同一镜像流跨窗口交接时保留 token 与编码尺寸，MediaCodec 直接切换到新 `SurfaceView`，厂商实现拒绝 `setOutputSurface` 时停止旧 Codec 并用有界保存的完整启动帧重建。
+6. DLNA XML 层保留发送端 `protocolInfo` 原文；播放器边界统一解析高置信 MIME（含 HLS），对 DLNA 的未知 progressive extractor 失败最多执行一次 HLS 重试，第二次失败必须保留可观测错误并交给现有错误状态机。
+7. 验证方式：`VideoDecodePolicyTest`、`MediaMimeResolverTest` 与直接相关 DLNA SOAP 测试通过，Debug 构建和原生编译通过；日志应能看到显示配置、解码候选快照、实际 codec 名称、RTP 源 / 编码尺寸和 Media3 实际 MIME。真实 Mac 扩展显示、分辨率切换、全屏交接和 Apple 设备跨会话恢复仍由用户在目标设备验收。
+8. 适用边界：当前目标固定为 `S56_HQX`、Android 9、`1920x1080`；该规则不宣称绕过 DRM、不引入转码服务器，也不允许在缺乏发送端证据时修改 AirPlay 型号或 feature bits。

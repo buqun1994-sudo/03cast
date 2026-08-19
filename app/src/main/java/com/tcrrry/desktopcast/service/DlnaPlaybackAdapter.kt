@@ -230,7 +230,17 @@ internal class DlnaPlaybackAdapter(
             )
         } else {
             mutableImage.value = null
-            host.startNetworkPlayback(activeLease, media.uri, startPositionSeconds, this)
+            host.startNetworkPlayback(
+                lease = activeLease,
+                location = media.uri,
+                startPositionSeconds = startPositionSeconds,
+                observer = this,
+                declaredMimeType = media.mimeType,
+                allowHlsFallback = media.kind in setOf(
+                    DlnaMediaKind.VIDEO,
+                    DlnaMediaKind.UNKNOWN,
+                ),
+            )
             applyVolume(activeLease)
         }
     }

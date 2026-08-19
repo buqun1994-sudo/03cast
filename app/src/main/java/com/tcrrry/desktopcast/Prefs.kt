@@ -10,6 +10,7 @@ object Prefs {
     const val DRIVING_PLAYBACK_GUARD = "driving_playback_guard"
     const val DEF_DRIVING_PLAYBACK_GUARD = true
     const val FALLBACK_MAC_ADDRESS = "fallback_mac_address"
+    const val AIRPLAY_DISPLAY_UUID = "airplay_display_uuid"
     val KEY_PRIORITY: String = MediaFormat.KEY_PRIORITY; const val DEF_KEY_PRIORITY = true
     const val LOW_LATENCY = "low_latency"; const val DEF_LOW_LATENCY = false
     const val AUDIO_AUTO_BUFFER = "audio_auto_buffer"; const val DEF_AUDIO_AUTO_BUFFER = true

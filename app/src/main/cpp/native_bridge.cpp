@@ -199,14 +199,30 @@ Java_com_tcrrry_desktopcast_bridge_NativeBridge_nativeDestroy(
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_tcrrry_desktopcast_bridge_NativeBridge_nativeSetDisplaySize(
-        JNIEnv *env, jobject thiz, jlong handle, jint w, jint h, jint fps) {
+        JNIEnv *env, jobject thiz, jlong handle, jint w, jint h, jint refreshHz) {
 
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx || !ctx->raop) return;
 
     raop_set_plist(ctx->raop, "width", w);
     raop_set_plist(ctx->raop, "height", h);
-    raop_set_plist(ctx->raop, "refreshRate", fps);
+    raop_set_plist(ctx->raop, "refreshRate", refreshHz);
+    LOGI("AirPlay display profile set: %dx%d @ %d Hz", w, h, refreshHz);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_tcrrry_desktopcast_bridge_NativeBridge_nativeSetDisplayUuid(
+        JNIEnv *env, jobject thiz, jlong handle, jstring uuid) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx || !ctx->raop || !uuid) return;
+    const char *uuid_c = env->GetStringUTFChars(uuid, NULL);
+    if (uuid_c) {
+        raop_set_display_uuid(ctx->raop, uuid_c);
+        LOGI("AirPlay display UUID set: %s", uuid_c);
+        env->ReleaseStringUTFChars(uuid, uuid_c);
+    }
 }
 
 /* Returns a HashMap<String, String> of TXT records */

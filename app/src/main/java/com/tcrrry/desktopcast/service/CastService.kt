@@ -8,7 +8,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
-import android.view.Surface
 import android.view.SurfaceHolder
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -182,8 +181,9 @@ class CastService : LifecycleService() {
         runtime.stop()
     }
 
-    fun setMirrorSurface(surface: Surface) = playback.setMirrorSurface(surface)
-    fun clearMirrorSurface(surface: Surface) = playback.clearMirrorSurface(surface)
+    fun setMirrorSurface(holder: SurfaceHolder, bufferWidth: Int = 0, bufferHeight: Int = 0) =
+        playback.setMirrorSurface(holder, bufferWidth, bufferHeight)
+    fun clearMirrorSurface(holder: SurfaceHolder) = playback.clearMirrorSurface(holder)
     fun setMediaSurface(holder: SurfaceHolder) = playback.setMediaSurface(holder)
     fun clearMediaSurface(holder: SurfaceHolder) = playback.clearMediaSurface(holder)
     fun togglePlayback() = playback.togglePlayback()
