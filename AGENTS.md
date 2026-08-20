@@ -9,7 +9,7 @@
 3. 项目类型：desktop-client
 4. 本仓库已经完成模板初始化，不再是通用模板本身。
 5. 通用能力索引和 blueprints 只作为候选参考，未写入项目总纲和验证矩阵前不得视为已实现能力。
-6. 产品包名固定为 `com.tcrrry.desktopcast`；应用名固定为“03投屏”。
+6. 产品包名固定为 `com.ninepointnine.desktopcast`；应用名固定为“03投屏”。
 7. 技术形态固定为 Android 9 原生车机客户端，采用单 `app` 模块、Kotlin、XML Views 和公开网络 / 媒体 API。
 
 ## 2. 默认目录边界

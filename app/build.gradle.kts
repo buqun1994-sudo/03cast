@@ -25,13 +25,6 @@ fun String.normalizedSha256OrNull(): String? = replace(":", "")
     .lowercase()
     .takeIf { value -> value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' } }
 
-val signingPropertiesFile = rootProject.file("keystore.properties")
-val signingProperties = Properties().apply {
-    if (signingPropertiesFile.exists()) {
-        signingPropertiesFile.inputStream().use(::load)
-    }
-}
-
 val deviceCommerceEnvironment = providers.gradleProperty("deviceCommerceEnvironment")
     .orElse("fixture")
     .get()
@@ -132,19 +125,42 @@ val stagingSigningStoreFile = if (deviceCommerceEnvironment == "staging") {
     null
 }
 
+val productionSigningPropertiesFile = providers.gradleProperty("deviceCommerceProductionSigningPropertiesFile")
+    .orNull
+    ?.trim()
+    ?.takeIf(String::isNotEmpty)
+    ?.let(rootProject::file)
+val productionSigningProperties = Properties()
+val productionSigningStoreFile = if (deviceCommerceEnvironment == "production") {
+    val propertiesFile = requireNotNull(productionSigningPropertiesFile) {
+        "Production APK signing properties file is required"
+    }
+    require(propertiesFile.isFile) {
+        "Production APK keystore properties file does not exist"
+    }
+    propertiesFile.inputStream().use(productionSigningProperties::load)
+    val configuredStoreFile = productionSigningProperties.requiredValue("storeFile")
+    val candidate = File(configuredStoreFile)
+    val resolved = if (candidate.isAbsolute) candidate else propertiesFile.parentFile.resolve(configuredStoreFile)
+    require(resolved.isFile) { "Production APK keystore does not exist" }
+    resolved
+} else {
+    null
+}
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
 android {
-    namespace = "com.tcrrry.desktopcast"
+    namespace = "com.ninepointnine.desktopcast"
     compileSdk = 36
     ndkVersion = "27.0.12077973"
     useLibrary("android.car")
 
     defaultConfig {
-        applicationId = "com.tcrrry.desktopcast"
+        applicationId = "com.ninepointnine.desktopcast"
         minSdk = 28
         targetSdk = 28
         versionCode = 1
@@ -170,12 +186,12 @@ android {
     }
 
     signingConfigs {
-        if (signingPropertiesFile.exists()) {
+        if (productionSigningStoreFile != null) {
             create("release") {
-                storeFile = rootProject.file(signingProperties.requiredValue("storeFile"))
-                storePassword = signingProperties.requiredValue("storePassword")
-                keyAlias = signingProperties.requiredValue("keyAlias")
-                keyPassword = signingProperties.requiredValue("keyPassword")
+                storeFile = productionSigningStoreFile
+                storePassword = productionSigningProperties.requiredValue("storePassword")
+                keyAlias = productionSigningProperties.requiredValue("keyAlias")
+                keyPassword = productionSigningProperties.requiredValue("keyPassword")
             }
         }
         if (stagingSigningStoreFile != null) {

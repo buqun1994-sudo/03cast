@@ -65,7 +65,7 @@
 
 1. 技术栈固定为 Kotlin、XML Views、单 `app` 模块与公开 Android API；原生协议代码只通过窄 JNI 边界进入应用流程层。
 2. 依赖方向固定为界面 -> 应用流程 -> 领域接口；DLNA、AirPlay、网络和媒体实现依赖领域接口，领域层不得依赖 Android 类型。
-3. Kotlin 包名统一使用 `com.tcrrry.desktopcast`；第三方源码保留原许可证头与来源记录，项目适配代码使用 ASCII 标识符。
+3. Kotlin 包名统一使用 `com.ninepointnine.desktopcast`；第三方源码保留原许可证头与来源记录，项目适配代码使用 ASCII 标识符。
 4. JVM 单测按 `session / dlna / discovery` 组织；Android 运行级验证由用户手测或经明确授权的诊断脚本负责，不把 ADB 依赖写进应用。
 
 ## 8. 车机界面、窗口与行车安全

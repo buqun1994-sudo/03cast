@@ -5,6 +5,10 @@
 *.local.*
 *.pem
 *.key
+*.jks
+*.keystore
+keystore.properties
+signing.properties
 
 # Dependencies and build outputs
 node_modules/

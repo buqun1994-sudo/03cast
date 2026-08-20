@@ -574,7 +574,7 @@
                                 android:paddingStart="@dimen/cast_settings_card_padding"
                                 android:paddingEnd="@dimen/cast_settings_card_padding">
 
-                                <com.tcrrry.desktopcast.IcarSwitch
+                                <com.ninepointnine.desktopcast.IcarSwitch
                                     android:id="@+id/driving_guard_switch"
                                     android:layout_width="@dimen/cast_settings_switch_width"
                                     android:layout_height="@dimen/cast_settings_switch_height"

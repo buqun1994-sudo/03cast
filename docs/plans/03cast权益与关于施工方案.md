@@ -2,7 +2,7 @@
 
 ## 1. 施工目标
 
-1. 为 `com.tcrrry.desktopcast` 补齐与 03 歌词同构的权益中心、支付 / 恢复购买流程和关于页。
+1. 为 `com.ninepointnine.desktopcast` 补齐与 03 歌词同构的权益中心、支付 / 恢复购买流程和关于页。
 2. 在等待页展示 `Checking / Trial / Expired / Pro / Error`，让用户知道当前能否开始投屏以及下一步动作。
 3. 只有通过统一商业准入的媒体会话才能创建播放器、解码器、音频或镜像输出；无权益时仍保持 AirPlay、DLNA、mDNS、SSDP 广播和发现能力。
 4. 不改变已验收的窗口交接、全屏切换、行车保护、协议 wire format 和 native AirPlay 主链。
@@ -23,7 +23,7 @@
 ```text
 productId = 03cast
 sku = 03cast_pro_device_cny
-packageName = com.tcrrry.desktopcast
+packageName = com.ninepointnine.desktopcast
 runtimeIdentifier = icar03
 locale = zh-CN
 deviceLimit = 1
@@ -35,9 +35,9 @@ deviceLimit = 1
 
 ## 3. 根因与物理定位
 
-1. [MainActivity.kt](/Users/q/Documents/Projects/03投屏/app/src/main/java/com/tcrrry/desktopcast/MainActivity.kt) 施工前只有 `RECEIVER`、`SAFETY` 两个设置分区，没有商业状态、支付页面和关于页面。
-2. [CastService.kt](/Users/q/Documents/Projects/03投屏/app/src/main/java/com/tcrrry/desktopcast/service/CastService.kt) 负责接收服务生命周期；[CastReceiverRuntime.kt](/Users/q/Documents/Projects/03投屏/app/src/main/java/com/tcrrry/desktopcast/service/CastReceiverRuntime.kt) 是 7000、8200、1900、mDNS 和唤醒锁 owner。
-3. [CastPlaybackRouter.kt](/Users/q/Documents/Projects/03投屏/app/src/main/java/com/tcrrry/desktopcast/service/CastPlaybackRouter.kt) 是唯一媒体输出 owner，`beginSession`、`beginAirPlayMirrorSession`、`ensureSession` 是所有输出创建入口。
+1. [MainActivity.kt](/Users/q/Documents/Projects/03投屏/app/src/main/java/com/ninepointnine/desktopcast/MainActivity.kt) 施工前只有 `RECEIVER`、`SAFETY` 两个设置分区，没有商业状态、支付页面和关于页面。
+2. [CastService.kt](/Users/q/Documents/Projects/03投屏/app/src/main/java/com/ninepointnine/desktopcast/service/CastService.kt) 负责接收服务生命周期；[CastReceiverRuntime.kt](/Users/q/Documents/Projects/03投屏/app/src/main/java/com/ninepointnine/desktopcast/service/CastReceiverRuntime.kt) 是 7000、8200、1900、mDNS 和唤醒锁 owner。
+3. [CastPlaybackRouter.kt](/Users/q/Documents/Projects/03投屏/app/src/main/java/com/ninepointnine/desktopcast/service/CastPlaybackRouter.kt) 是唯一媒体输出 owner，`beginSession`、`beginAirPlayMirrorSession`、`ensureSession` 是所有输出创建入口。
 4. `CastSessionCoordinator` 只表达投屏会话状态，不吸收商业页面状态。商业权益使用独立 coordinator / access gate，通过监听与适配器影响 Router。
 
 ## 4. 施工边界与文件锚点
@@ -47,12 +47,12 @@ deviceLimit = 1
 从 `/Users/q/Documents/Projects/03lyrics/app/src/main/kotlin/com/tcrrry/desktoplyrics/commercial/` 迁移并改造以下主链到：
 
 ```text
-app/src/main/java/com/tcrrry/desktopcast/commercial/
+app/src/main/java/com/ninepointnine/desktopcast/commercial/
 ```
 
 核心类型包括 `CommercialModels`、`CommercialAccess`、`CommercialSecurity`、`CommercialStateMachine`、`CommercialEntitlementCoordinator`、`CommercialController`、`CommercialRuntime`、`DeviceCommerceApi`、`DeviceCommerceLicense`、`CloudDeviceCommercialGateway`、`AndroidDeviceIdentity`、`AndroidPackageIdentity`、`AndroidSecureCommercialStore`、`RemotePaymentQrLoader`。
 
-所有新 Kotlin 文件从本仓库 [MainActivity.kt](/Users/q/Documents/Projects/03投屏/app/src/main/java/com/tcrrry/desktopcast/MainActivity.kt) 复制 ASCII 包声明和 UTF-8 文件头；目标包名为 `com.tcrrry.desktopcast` 或其 `commercial` / `service` 子包。不得根据终端乱码重建中文文本。
+所有新 Kotlin 文件从本仓库 [MainActivity.kt](/Users/q/Documents/Projects/03投屏/app/src/main/java/com/ninepointnine/desktopcast/MainActivity.kt) 复制 ASCII 包声明和 UTF-8 文件头；目标包名为 `com.ninepointnine.desktopcast` 或其 `commercial` / `service` 子包。不得根据终端乱码重建中文文本。
 
 ### 4.2 构建与信任层
 
@@ -69,8 +69,8 @@ Debug 默认 `fixture`，可用 Gradle property 显式切换 staging；Release �
 变体实现文件：
 
 ```text
-app/src/debug/java/com/tcrrry/desktopcast/commercial/CommercialRuntimeFactory.kt
-app/src/release/java/com/tcrrry/desktopcast/commercial/CommercialRuntimeFactory.kt
+app/src/debug/java/com/ninepointnine/desktopcast/commercial/CommercialRuntimeFactory.kt
+app/src/release/java/com/ninepointnine/desktopcast/commercial/CommercialRuntimeFactory.kt
 ```
 
 Debug fixture 在 Android Keystore 中运行时生成 `03cast` 专用测试签名器，并支持试用、过期、Pro、撤权、支付待定 / 成功等可重复场景；不得携带真实许可证或生产密钥。
@@ -110,9 +110,9 @@ app/src/main/res/layout/view_cast_commercial_waiting.xml
 新增：
 
 ```text
-app/src/main/java/com/tcrrry/desktopcast/commercial/CommercialRuntimeAccessGuard.kt
-app/src/main/java/com/tcrrry/desktopcast/service/CastCommercialAccessAdapter.kt
-app/src/main/java/com/tcrrry/desktopcast/CastCommercialWaitingRenderer.kt
+app/src/main/java/com/ninepointnine/desktopcast/commercial/CommercialRuntimeAccessGuard.kt
+app/src/main/java/com/ninepointnine/desktopcast/service/CastCommercialAccessAdapter.kt
+app/src/main/java/com/ninepointnine/desktopcast/CastCommercialWaitingRenderer.kt
 ```
 
 `CommercialRuntimeAccessGuard` 只缓存已验证的 `Allowed`，在签名续签点和最终边界重新验证。`CastCommercialAccessAdapter` 将商业决定映射为 Router 的授权、清权和输出释放，不让商业包依赖协议实现。

@@ -80,3 +80,12 @@
 2. 已完成：服务端原价删除线改为同色系蓝灰，活动价仍使用蓝紫强调色；Pro 改为按正文实际字面高度对齐的皇冠内联富文本，并从主等待内容抽离到设置入口上方；长广告点击先进入权益中心首页。
 3. 已补充：等待页状态布局与首页跳转行为的布局契约测试。
 4. 已验证：本轮 Debug APK 已通过 `--install-only` 覆盖安装到 `S56_HQX`，未启动应用。
+
+## 2026-08-20 包名与签名身份迁移
+
+1. 已确认：03投屏最终 Android 包名为 `com.ninepointnine.desktopcast`；`productId=03cast`、SKU `03cast_pro_device_cny`、运行标识 `icar03` 保持不变。
+2. 已完成：Kotlin / debug / release / test 源码目录、Manifest、构建配置、ProGuard、安装脚本、源码路径契约、JNI native 导出符号和 cloud 03cast 契约同步迁移；`com.tcrrry.icar.window.*` 与 `com.tcrrry.icar.surface.*` 跨应用协议常量保持不变。
+3. 已生成：仓库外独立 staging / production RSA 4096 签名材料，摘要记录于 `/Users/q/Desktop/secrets/03cast-ninepointnine-signing-summary.txt`；旧包证书与目录未覆盖。
+4. 已完成：production 签名入口改为 `deviceCommerceProductionSigningPropertiesFile` 外部注入，并将 `*.jks`、`*.keystore`、`keystore.properties`、`signing.properties` 加入忽略规则。
+5. 待完成：cloud 注入新证书摘要与 trust bundle；新包在 `S56_HQX` 的 `CAR_POWERTRAIN` 授权复验；新包单独的真实 DLNA / AirPlay、商业门禁和端口释放验收。
+6. 本轮边界：未安装新包、未卸载旧包、未清数据、未修改车机设置、未部署 cloud、未执行真实支付。

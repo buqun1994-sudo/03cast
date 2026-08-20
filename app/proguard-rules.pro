@@ -1,4 +1,4 @@
--keep class com.tcrrry.desktopcast.bridge.** { *; }
+-keep class com.ninepointnine.desktopcast.bridge.** { *; }
 -keepclasseswithmembernames class * {
     native <methods>;
 }

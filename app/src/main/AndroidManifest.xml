@@ -55,7 +55,7 @@
             android:launchMode="singleTop"
             android:resizeableActivity="false"
             android:screenOrientation="landscape"
-            android:taskAffinity="com.tcrrry.desktopcast.fullscreen"
+            android:taskAffinity="com.ninepointnine.desktopcast.fullscreen"
             android:theme="@style/Theme.DesktopCast.Fullscreen" />
 
         <service
