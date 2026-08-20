@@ -19,7 +19,7 @@ internal class CastMediaControlBridge(
     looper: Looper,
     private val snapshot: () -> CastSessionState,
     private val setPlaying: (Boolean) -> Unit,
-    private val seekTo: (Long) -> Unit,
+    private val onSeekRequested: (Long) -> Unit,
 ) : SimpleBasePlayer(looper) {
 
     fun refresh() = invalidateState()
@@ -86,7 +86,7 @@ internal class CastMediaControlBridge(
         seekCommand: Int,
     ): ListenableFuture<*> {
         if (seekCommand == Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM) {
-            seekTo(positionMs.coerceAtLeast(0L))
+            onSeekRequested(positionMs.coerceAtLeast(0L))
         }
         return Futures.immediateVoidFuture()
     }

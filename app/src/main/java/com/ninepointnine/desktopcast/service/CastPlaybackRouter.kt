@@ -69,7 +69,7 @@ class CastPlaybackRouter internal constructor(
         looper = Looper.getMainLooper(),
         snapshot = { sessionState.value },
         setPlaying = ::setPlayingFromControls,
-        seekTo = ::seekToPosition,
+        onSeekRequested = ::seekToPosition,
     )
     val mediaControlPlayer: Player get() = mediaControlBridge
     val videoRenderer: VideoRenderer get() = airPlayAdapter.videoRenderer

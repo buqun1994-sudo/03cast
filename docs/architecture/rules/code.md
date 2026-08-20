@@ -94,3 +94,10 @@
 2. 应采取动作：`compileSdk` 只代表编译时可见性，不代表目标系统运行时存在。每个新增平台符号都必须核对首次 API 等级；高于 `minSdk` 时只能放在明确的版本分支内，或改用目标系统已有的公开契约。禁止依赖编译成功、JVM 单测或厂商实现碰巧存在来推定兼容。
 3. 验证方式：相关代码必须执行 Android Lint `NewApi` 检查，并在最低版本真机故障诊断时优先检查 `NoSuchFieldError / NoSuchMethodError / VerifyError`。本项目窗口主链只允许 API 28 及以下的公开符号。
 4. 适用边界：该规则适用于 Kotlin / Java 对 Android Framework 的直接调用；第三方 native ABI、反射兼容和可选系统库需要各自独立的版本门禁，不能由本规则替代。
+
+## 11. Media3 控制桥回调命名规则
+
+1. 触发条件：`SimpleBasePlayer` 子类通过函数类型属性接收播放、暂停或定位等控制回调，且回调语义可能与继承自 `Player` 的方法同名。
+2. 应采取动作：回调属性必须使用意图命名（例如 `onSeekRequested`），调用处明确调用该函数属性；禁止使用 `seekTo`、`play` 等继承方法名作为回调属性名，避免 Kotlin 将无限定调用解析为父类播放器方法并形成递归。
+3. 验证方式：为每个控制回调保留最小 JVM 回归用例，直接触发对应 `handle*` 覆写并断言回调只执行一次；编译产物应显示调用函数对象的 `invoke`，不能回调 `Player` 的同名方法。
+4. 适用边界：仅约束 Media3 `SimpleBasePlayer` 控制桥的函数属性命名与调用，不限制普通 Kotlin 类或协议适配器的领域方法命名。
