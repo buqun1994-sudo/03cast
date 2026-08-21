@@ -7,11 +7,10 @@ import org.junit.Test
 
 class CastWindowPolicyTest {
     @Test
-    fun standardWindowKeepsItsTaskWhileOpeningFullscreen() {
+    fun standardWindowCreatesDisposableFullscreenTask() {
         val transition = CastWindowPolicy.transitionFrom(CastWindowMode.STANDARD)
 
         assertEquals(CastWindowMode.FULLSCREEN, transition.target)
-        assertTrue(transition.moveSourceTaskToBack)
         assertFalse(transition.reuseTargetTask)
         assertFalse(transition.retireSourceAfterLaunch)
     }
@@ -21,7 +20,6 @@ class CastWindowPolicyTest {
         val transition = CastWindowPolicy.transitionFrom(CastWindowMode.FULLSCREEN)
 
         assertEquals(CastWindowMode.STANDARD, transition.target)
-        assertFalse(transition.moveSourceTaskToBack)
         assertTrue(transition.reuseTargetTask)
         assertTrue(transition.retireSourceAfterLaunch)
     }

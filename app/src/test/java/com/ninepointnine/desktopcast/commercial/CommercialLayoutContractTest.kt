@@ -25,8 +25,11 @@ class CommercialLayoutContractTest {
 
         assertTrue(activity.contains("settings_navigation_entitlement"))
         assertTrue(activity.contains("settings_navigation_about"))
-        assertTrue(activity.contains("content_settings_commercial"))
-        assertTrue(activity.contains("content_settings_about"))
+        assertTrue(activity.contains("commercial_summary_stub"))
+        assertTrue(activity.contains("settings_commercial_stub"))
+        assertTrue(activity.contains("settings_about_stub"))
+        assertTrue(activity.contains("android:layout=\"@layout/content_settings_commercial\""))
+        assertTrue(activity.contains("android:layout=\"@layout/content_settings_about\""))
         assertTrue(activity.contains("view_cast_commercial_waiting"))
         assertTrue(activity.contains("settings_title_text"))
         assertTrue(activity.contains("settings_entitlement_badge"))
@@ -48,6 +51,28 @@ class CommercialLayoutContractTest {
         assertTrue(strings.contains("cast_commercial_waiting_pro"))
         assertTrue(strings.contains("cast_commercial_purchase_ad_prefix"))
         assertTrue(strings.contains("settings_navigation_about"))
+    }
+
+    @Test
+    fun heavySettingsAndAgreementQrStayOutOfWindowCreationPath() {
+        val appDirectory = findAppDirectory()
+        val activity = File(
+            appDirectory,
+            "src/main/res/layout/activity_main.xml",
+        ).readText()
+        val mainActivity = File(
+            appDirectory,
+            "src/main/java/com/ninepointnine/desktopcast/MainActivity.kt",
+        ).readText()
+
+        assertTrue(activity.contains("<ViewStub"))
+        assertTrue(mainActivity.contains("ensureCommercialSettingsUi()"))
+        assertTrue(mainActivity.contains("ensureAboutUi()"))
+        assertTrue(mainActivity.contains("ensureDrivingAgreementQrCode()"))
+        assertTrue(
+            mainActivity.indexOf("private fun ensureAboutUi()") <
+                mainActivity.indexOf("TermsQrCodeFactory.create(BuildConfig.TERMS_URL, ABOUT_QR_BITMAP_SIZE_PX)")
+        )
     }
 
     @Test

@@ -18,7 +18,6 @@ enum class CastWindowMode {
 
 data class CastWindowTransition(
     val target: CastWindowMode,
-    val moveSourceTaskToBack: Boolean,
     val reuseTargetTask: Boolean,
     val retireSourceAfterLaunch: Boolean,
 )
@@ -27,13 +26,11 @@ object CastWindowPolicy {
     fun transitionFrom(source: CastWindowMode): CastWindowTransition = when (source) {
         CastWindowMode.STANDARD -> CastWindowTransition(
             target = CastWindowMode.FULLSCREEN,
-            moveSourceTaskToBack = true,
             reuseTargetTask = false,
             retireSourceAfterLaunch = false,
         )
         CastWindowMode.FULLSCREEN -> CastWindowTransition(
             target = CastWindowMode.STANDARD,
-            moveSourceTaskToBack = false,
             reuseTargetTask = true,
             retireSourceAfterLaunch = true,
         )
@@ -84,7 +81,6 @@ class CastWindowNavigator(
         val serviceIntent = Intent(activity, CastService::class.java)
         val token = service.beginWindowHandoff()
         outgoingToken = token
-        var sourceMovedToBack = false
 
         val targetLaunched = executeWindowTransition(
             launchTarget = {
@@ -92,9 +88,6 @@ class CastWindowNavigator(
                 val nextIntent = targetIntent(transition, token)
                 val options = ActivityOptions.makeBasic()
                     .setLaunchBounds(targetBounds(transition.target))
-                if (transition.moveSourceTaskToBack) {
-                    sourceMovedToBack = activity.moveTaskToBack(true)
-                }
                 activity.startActivity(nextIntent, options.toBundle())
             },
             retireSource = {
@@ -116,7 +109,6 @@ class CastWindowNavigator(
 
         outgoingToken = null
         if (service.cancelWindowHandoff(token)) activity.stopService(serviceIntent)
-        if (sourceMovedToBack) restoreSourceTask()
         onFailure()
     }
 
@@ -170,20 +162,6 @@ class CastWindowNavigator(
         return Intent(activity, targetClass).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or taskFlag)
             putExtra(EXTRA_WINDOW_HANDOFF_TOKEN, token)
-        }
-    }
-
-    private fun restoreSourceTask() {
-        val sourceClass = when (mode) {
-            CastWindowMode.STANDARD -> MainActivity::class.java
-            CastWindowMode.FULLSCREEN -> FullscreenActivity::class.java
-        }
-        val intent = Intent(activity, sourceClass).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-        }
-        runCatching {
-            val options = ActivityOptions.makeBasic().setLaunchBounds(targetBounds(mode))
-            activity.startActivity(intent, options.toBundle())
         }
     }
 

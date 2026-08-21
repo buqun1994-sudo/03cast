@@ -417,7 +417,11 @@
                 android:background="@drawable/cast_settings_content"
                 android:orientation="vertical">
 
-                <include layout="@layout/view_cast_commercial_summary" />
+                <ViewStub
+                    android:id="@+id/commercial_summary_stub"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/commercial_summary_height"
+                    android:layout="@layout/view_cast_commercial_summary" />
 
                 <ScrollView
                     android:id="@+id/settings_content_scroll"
@@ -635,8 +639,17 @@
                             </LinearLayout>
                         </LinearLayout>
 
-                        <include layout="@layout/content_settings_commercial" />
-                        <include layout="@layout/content_settings_about" />
+                        <ViewStub
+                            android:id="@+id/settings_commercial_stub"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:layout="@layout/content_settings_commercial" />
+
+                        <ViewStub
+                            android:id="@+id/settings_about_stub"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout="@layout/content_settings_about" />
                     </FrameLayout>
                 </ScrollView>
             </LinearLayout>
