@@ -108,6 +108,57 @@ class CastPlaybackRouter internal constructor(
 
     fun clearMediaSurface(holder: SurfaceHolder) = networkPlayer.clearSurface(holder)
 
+    /**
+     * Establishes the media-side boundary for a cross-Activity window handoff.
+     * Both decoders release their Activity-owned BufferQueue before the
+     * navigator is allowed to launch the target task.
+     */
+    internal fun prepareWindowHandoff(): Boolean {
+        checkOnMainThread()
+        val networkDetached = networkPlayer.detachSurfaceForWindowHandoff()
+        videoRenderer.detachSurfaceForWindowHandoff()
+        if (networkDetached) return true
+
+        // A failed preflight must leave the visible source window usable and
+        // must never hand a half-detached session to a new Activity.
+        networkPlayer.restoreSurfaceAfterWindowHandoff()
+        videoRenderer.restoreSurfaceAfterWindowHandoff()
+        return false
+    }
+
+    internal fun restoreWindowHandoffOutput() {
+        checkOnMainThread()
+        networkPlayer.restoreSurfaceAfterWindowHandoff()
+        videoRenderer.restoreSurfaceAfterWindowHandoff()
+    }
+
+    /**
+     * Verifies that the target Activity owns the output queue before the
+     * window token can retire the source Activity.
+     */
+    internal fun confirmWindowHandoffOutput(
+        content: CastContentKind,
+        targetHolder: SurfaceHolder?,
+    ): Boolean {
+        checkOnMainThread()
+        return when (content) {
+            CastContentKind.NETWORK_VIDEO ->
+                targetHolder != null && networkPlayer.confirmSurfaceForWindowHandoff(targetHolder)
+            CastContentKind.MIRROR ->
+                targetHolder != null && videoRenderer.isSurfaceBound(targetHolder)
+            CastContentKind.NONE,
+            CastContentKind.AUDIO,
+            CastContentKind.IMAGE,
+            -> true
+        }
+    }
+
+    internal fun commitWindowHandoffOutput() {
+        checkOnMainThread()
+        networkPlayer.commitSurfaceWindowHandoff()
+        videoRenderer.commitSurfaceWindowHandoff()
+    }
+
     fun togglePlayback() = runOnMain {
         if (drivingPlaybackInterlock.isBlocked) return@runOnMain
         when (sessionState.value.protocol) {

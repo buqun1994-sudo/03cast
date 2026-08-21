@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Surface
 import android.view.SurfaceHolder
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -17,8 +18,164 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.UnrecognizedInputFormatException
+import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
+import androidx.media3.exoplayer.video.VideoRendererEventListener
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+
+/**
+ * Media3 normally uses MediaCodec.setOutputSurface() when a player receives a
+ * new Surface. The Android 9 Qualcomm decoder on the target car can keep the
+ * old BufferQueue alive after that call and fail asynchronously in qbuf. Make
+ * the renderer take the documented workaround path, which releases and
+ * recreates the codec instead of hot-swapping its output queue.
+ */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Suppress("DEPRECATION")
+private class SurfaceHandoffVideoRenderer(
+    context: Context,
+    codecAdapterFactory: MediaCodecAdapter.Factory,
+    selector: MediaCodecSelector,
+    allowedVideoJoiningTimeMs: Long,
+    enableDecoderFallback: Boolean,
+    eventHandler: Handler,
+    eventListener: VideoRendererEventListener,
+    maxDroppedVideoFrameCountToNotify: Int,
+) : MediaCodecVideoRenderer(
+    context,
+    codecAdapterFactory,
+    selector,
+    allowedVideoJoiningTimeMs,
+    enableDecoderFallback,
+    eventHandler,
+    eventListener,
+    maxDroppedVideoFrameCountToNotify,
+) {
+    private val outputStateLock = Any()
+    private var outputGeneration = 0L
+    private var outputSurface: Surface? = null
+    private var outputWaiter: OutputWaiter? = null
+
+    override fun handleMessage(messageType: Int, message: Any?) {
+        super.handleMessage(messageType, message)
+        if (messageType != Renderer.MSG_SET_VIDEO_OUTPUT) return
+        val deliveredSurface = message as? Surface
+        val waiter = synchronized(outputStateLock) {
+            outputSurface = deliveredSurface
+            outputGeneration += 1
+            outputWaiter?.takeIf {
+                it.afterGeneration < outputGeneration && it.surface === deliveredSurface
+            }?.also { outputWaiter = null }
+        }
+        waiter?.latch?.countDown()
+    }
+
+    fun outputGeneration(): Long = synchronized(outputStateLock) { outputGeneration }
+
+    fun isOutputSurface(surface: Surface): Boolean = synchronized(outputStateLock) {
+        outputSurface === surface
+    }
+
+    /**
+     * Waits for the exact Surface message submitted by ExoPlayer to be handled
+     * on the playback thread. Surface.isValid alone only proves that the
+     * BufferQueue exists; this proves that this renderer owns that queue.
+     */
+    fun awaitOutputSurface(
+        surface: Surface,
+        afterGeneration: Long,
+        timeoutMs: Long,
+    ): Boolean {
+        val waiter: OutputWaiter
+        synchronized(outputStateLock) {
+            if (outputGeneration > afterGeneration && outputSurface === surface) return true
+            waiter = OutputWaiter(afterGeneration, surface, CountDownLatch(1))
+            outputWaiter = waiter
+        }
+        try {
+            waiter.latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return false
+        } finally {
+            synchronized(outputStateLock) {
+                if (outputWaiter === waiter) outputWaiter = null
+            }
+        }
+        return synchronized(outputStateLock) {
+            outputGeneration > afterGeneration && outputSurface === surface
+        }
+    }
+
+    private data class OutputWaiter(
+        val afterGeneration: Long,
+        val surface: Surface,
+        val latch: CountDownLatch,
+    )
+
+    override fun codecNeedsSetOutputSurfaceWorkaround(codecName: String): Boolean {
+        val android9VendorCodec = SurfaceHandoffPolicy.forceCodecRecreate(
+            sdkInt = android.os.Build.VERSION.SDK_INT,
+            codecName = codecName,
+        )
+        if (android9VendorCodec) {
+            Log.i(TAG, "Forcing codec recreation for Android 9 vendor output: $codecName")
+        }
+        return android9VendorCodec || super.codecNeedsSetOutputSurfaceWorkaround(codecName)
+    }
+
+    private companion object {
+        const val TAG = "SurfaceHandoffVideoRenderer"
+    }
+}
+
+/** Keeps the exact renderer instance so a handoff can wait for its output detach. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+private class SurfaceHandoffRenderersFactory(
+    context: Context,
+    selector: MediaCodecSelector,
+) : DefaultRenderersFactory(context) {
+
+    var videoRenderer: SurfaceHandoffVideoRenderer? = null
+        private set
+
+    fun resetVideoRendererReference() {
+        videoRenderer = null
+    }
+
+    init {
+        setMediaCodecSelector(selector)
+    }
+
+    override fun buildVideoRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        eventHandler: Handler,
+        eventListener: VideoRendererEventListener,
+        allowedVideoJoiningTimeMs: Long,
+        out: ArrayList<Renderer>,
+    ) {
+        val renderer = SurfaceHandoffVideoRenderer(
+            context = context,
+            codecAdapterFactory = getCodecAdapterFactory(),
+            selector = mediaCodecSelector,
+            allowedVideoJoiningTimeMs = allowedVideoJoiningTimeMs,
+            enableDecoderFallback = enableDecoderFallback,
+            eventHandler = eventHandler,
+            eventListener = eventListener,
+            maxDroppedVideoFrameCountToNotify =
+                DefaultRenderersFactory.MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY,
+        )
+        videoRenderer = renderer
+        out.add(renderer)
+    }
+}
 
 // rate is 0 while buffering; speed is the configured rate regardless of pause state
 // native reads the effective rate, overlay reads playWhenReady + speed + skipSilence
@@ -34,13 +191,19 @@ data class PlaybackSnapshot(
 )
 
 // exoplayer calls stay on the main thread; native only reads the onPlaybackInfo snapshot
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class NetworkMediaPlayer(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val renderersFactory = DefaultRenderersFactory(context)
-        .setMediaCodecSelector(HARDWARE_VIDEO_CODEC_SELECTOR)
+    private val renderersFactory = SurfaceHandoffRenderersFactory(
+        context = context,
+        selector = HARDWARE_VIDEO_CODEC_SELECTOR,
+    )
     private var player: ExoPlayer? = null
+    private var activeVideoRenderer: SurfaceHandoffVideoRenderer? = null
     private var pendingSurfaceHolder: SurfaceHolder? = null
+    private var pendingSurfaceOutputGeneration: Long? = null
+    private var handoffSurfaceHolder: SurfaceHolder? = null
     private var currentLocation: String? = null
     private var currentStartPositionSeconds = 0f
     private var currentDeclaredMimeType: String? = null
@@ -143,11 +306,17 @@ class NetworkMediaPlayer(private val context: Context) {
     ) {
         // recycling must not report the stopped sentinel: senders poll right after /play
         _stopInternal(reportStopped = false)
-        val p = ExoPlayer.Builder(context, renderersFactory).build().also {
-            it.addListener(_listener)
-            pendingSurfaceHolder?.let(it::setVideoSurfaceHolder)
-        }
+        renderersFactory.resetVideoRendererReference()
+        val p = ExoPlayer.Builder(context, renderersFactory)
+            .setDetachSurfaceTimeoutMs(SURFACE_HANDOFF_TIMEOUT_MS)
+            .build()
+            .also { it.addListener(_listener) }
         player = p
+        activeVideoRenderer = renderersFactory.videoRenderer
+        pendingSurfaceHolder?.let { holder ->
+            pendingSurfaceOutputGeneration = activeVideoRenderer?.outputGeneration()
+            p.setVideoSurfaceHolder(holder)
+        }
         val resolvedMimeType = forcedMimeType ?: MediaMimeResolver.resolve(location, declaredMimeType)
         val mediaItem = MediaItem.Builder()
             .setUri(location)
@@ -214,7 +383,10 @@ class NetworkMediaPlayer(private val context: Context) {
     }
 
     fun setSurface(holder: SurfaceHolder) = runOnMain {
+        if (!holder.surface.isValid) return@runOnMain
+        if (pendingSurfaceHolder === holder) return@runOnMain
         pendingSurfaceHolder = holder
+        pendingSurfaceOutputGeneration = activeVideoRenderer?.outputGeneration()
         player?.setVideoSurfaceHolder(holder)
     }
 
@@ -222,7 +394,122 @@ class NetworkMediaPlayer(private val context: Context) {
     fun clearSurface(holder: SurfaceHolder) = runOnMain {
         if (pendingSurfaceHolder !== holder) return@runOnMain
         pendingSurfaceHolder = null
+        pendingSurfaceOutputGeneration = null
         player?.clearVideoSurfaceHolder(holder)
+    }
+
+    /**
+     * Confirms that the target Activity's Surface reached the Media3 renderer.
+     * The caller must have already submitted this holder through setSurface;
+     * if the player was created after the callback, this method submits it once
+     * and waits for the matching output generation.
+     */
+    fun confirmSurfaceForWindowHandoff(holder: SurfaceHolder): Boolean {
+        check(Looper.myLooper() == Looper.getMainLooper()) {
+            "Surface handoff must run on the main thread"
+        }
+        val surface = holder.surface.takeIf { it.isValid } ?: return false
+        if (pendingSurfaceHolder !== holder) return false
+        val p = player ?: return false
+        val renderer = activeVideoRenderer ?: return false
+        if (renderer.isOutputSurface(surface)) {
+            Log.i(TAG, "Network video target output already owned: surface=${surfaceId(surface)}")
+            return true
+        }
+
+        val afterGeneration = pendingSurfaceOutputGeneration ?: renderer.outputGeneration().also {
+            pendingSurfaceOutputGeneration = it
+            p.setVideoSurfaceHolder(holder)
+        }
+        val delivered = renderer.awaitOutputSurface(
+            surface = surface,
+            afterGeneration = afterGeneration,
+            timeoutMs = SURFACE_HANDOFF_TIMEOUT_MS,
+        )
+        if (delivered) {
+            Log.i(
+                TAG,
+                "Network video target output acknowledged: " +
+                    "surface=${surfaceId(surface)} generation=${renderer.outputGeneration()}",
+            )
+        } else {
+            Log.w(
+                TAG,
+                "Network video target output acknowledgement timed out: " +
+                    "surface=${surfaceId(surface)} after=$afterGeneration",
+            )
+        }
+        return delivered && p.playerError == null
+    }
+
+    /**
+     * Detaches the current Activity-owned output and waits for Media3's
+     * playback thread to finish the renderer message. This is an acknowledgement
+     * boundary, not a sleep: the source Surface may be destroyed only after the
+     * old codec has stopped touching its BufferQueue.
+     */
+    fun detachSurfaceForWindowHandoff(): Boolean {
+        check(Looper.myLooper() == Looper.getMainLooper()) {
+            "Surface handoff must run on the main thread"
+        }
+        val sourceHolder = pendingSurfaceHolder
+        handoffSurfaceHolder = sourceHolder
+        pendingSurfaceHolder = null
+        pendingSurfaceOutputGeneration = null
+        val p = player ?: return true
+        return try {
+            // Send the renderer detach first and wait for the codec release.
+            // Only after that acknowledgement do we update ExoPlayer's holder
+            // bookkeeping, so a destroyed source Surface can never race the
+            // old codec queue.
+            val renderer = checkNotNull(activeVideoRenderer) {
+                "Media3 video renderer was not created"
+            }
+            val delivered = p.createMessage(renderer)
+                .setType(Renderer.MSG_SET_VIDEO_OUTPUT)
+                .setPayload(null)
+                .send()
+                .blockUntilDelivered(SURFACE_HANDOFF_TIMEOUT_MS)
+            check(delivered) { "Media3 video output detach was not delivered" }
+            p.clearVideoSurface()
+            check(p.playerError == null) { "Media3 rejected the video output detach" }
+            Log.i(TAG, "Network video output detached before window handoff")
+            true
+        } catch (error: Exception) {
+            Log.w(TAG, "Network video output detach failed; keeping source window", error)
+            handoffSurfaceHolder = null
+            if (sourceHolder?.surface?.isValid == true) {
+                pendingSurfaceHolder = sourceHolder
+                pendingSurfaceOutputGeneration = activeVideoRenderer?.outputGeneration()
+                p.setVideoSurfaceHolder(sourceHolder)
+            }
+            false
+        }
+    }
+
+    /** Restores the source output when target Activity launch is rejected/expired. */
+    fun restoreSurfaceAfterWindowHandoff() = runOnMain {
+        val sourceHolder = handoffSurfaceHolder ?: return@runOnMain
+        handoffSurfaceHolder = null
+        if (pendingSurfaceHolder === sourceHolder) return@runOnMain
+        val targetHolder = pendingSurfaceHolder
+        pendingSurfaceHolder = null
+        pendingSurfaceOutputGeneration = null
+        if (targetHolder != null) {
+            player?.clearVideoSurfaceHolder(targetHolder)
+        } else {
+            player?.clearVideoSurface()
+        }
+        if (sourceHolder.surface?.isValid != true) return@runOnMain
+        pendingSurfaceHolder = sourceHolder
+        pendingSurfaceOutputGeneration = activeVideoRenderer?.outputGeneration()
+        player?.setVideoSurfaceHolder(sourceHolder)
+        Log.i(TAG, "Network video output restored after cancelled window handoff")
+    }
+
+    /** Drops the retained source reference once the target Surface owns output. */
+    fun commitSurfaceWindowHandoff() = runOnMain {
+        handoffSurfaceHolder = null
     }
 
     fun stop() = runOnMain { _stopInternal(reportStopped = true) }
@@ -230,6 +517,8 @@ class NetworkMediaPlayer(private val context: Context) {
     fun release() = runOnMain {
         _stopInternal(reportStopped = false)
         pendingSurfaceHolder = null
+        pendingSurfaceOutputGeneration = null
+        handoffSurfaceHolder = null
     }
 
     private fun _stopInternal(reportStopped: Boolean) {
@@ -239,6 +528,8 @@ class NetworkMediaPlayer(private val context: Context) {
             it.release()
         }
         player = null
+        activeVideoRenderer = null
+        pendingSurfaceOutputGeneration = null
         // duration=-1 is the "video finished" sentinel for the playback-info handler
         if (reportStopped) {
             onPlaybackInfo?.invoke(PlaybackSnapshot(0f, -1f, 0f, false, false))
@@ -280,6 +571,10 @@ class NetworkMediaPlayer(private val context: Context) {
     companion object {
         private const val TAG = "NetworkMediaPlayer"
         private const val REPORT_INTERVAL_MS = 250L
+        private const val SURFACE_HANDOFF_TIMEOUT_MS = 1_000L
+
+        private fun surfaceId(surface: Surface): String =
+            "0x${System.identityHashCode(surface).toString(16)}"
 
         private val HARDWARE_VIDEO_CODEC_SELECTOR = MediaCodecSelector {
                 mimeType,

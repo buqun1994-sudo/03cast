@@ -23,9 +23,9 @@
 1. 触发条件：目标车机上网络视频或 AirPlay 镜像已经有声音、进度持续前进、硬件解码器持续输出帧，但实体屏幕的视频区域保持纯黑。
 2. 首先检查 `SurfaceFlinger` 的视频层合成类型。若高通解码器输出 UBWC 私有 YUV 缓冲，而视频层处于应用窗口下方并被标记为 `Client`，不得继续把问题归因于协议、媒体地址、HDR 或解码失败。
 3. 在 `S56_HQX`、Android 9、`msmnile` 主链上，网络视频与镜像视频必须直接输出到独立 `SurfaceView`；表面使用不透明像素格式并置于应用窗口上方，使视频缓冲保持 `Device/HWC` 合成。禁止默认改用 `TextureView`、OpenGL 中转或 CPU 拷贝来读取厂商 UBWC 缓冲。
-4. 解码器输出尺寸与窗口显示尺寸必须分开管理。编码帧到达后，使用 `SurfaceHolder.setFixedSize(encodedWidth, encodedHeight)` 设置 BufferQueue 的 producer geometry，并等待匹配的 `surfaceChanged` 回调后再 configure / rebind codec；Activity 只按源比例调整 SurfaceView 的显示矩形，不能用浮窗的 `1230x810` 等布局尺寸配置 codec。停止播放或销毁表面前恢复 `setSizeFromLayout()`，避免下一代媒体继承旧 buffer 尺寸。
+4. 解码器输出尺寸与窗口显示尺寸必须分开管理。编码帧到达后，使用 `SurfaceHolder.setFixedSize(encodedWidth, encodedHeight)` 设置 BufferQueue 的 producer geometry，并等待匹配的 `surfaceChanged` 回调后再 configure / rebind codec；Activity 只按源比例调整 SurfaceView 的显示矩形，不能用浮窗的 `1230x810` 等布局尺寸配置 codec。停止播放或销毁表面前恢复 `setSizeFromLayout()`，避免下一代媒体继承旧 buffer 尺寸。对网络媒体，`surfaceChanged` 只负责布局适配，不得对仍在使用的同一 `SurfaceHolder` 重复调用 `setMediaSurface`；只在 `surfaceCreated` 或目标 Activity 首次接管时提交输出。
 5. 置顶视频表面会覆盖同一 Activity 中与其重叠的普通 View。播放控件、状态文字和关闭入口必须放在视频矩形之外，或在非播放状态隐藏视频表面；若产品需要覆盖视频，必须使用不申请悬浮窗权限的公开应用子窗口（如 attached `PopupWindow`），不得依赖同一窗口的普通 View 叠加。
-6. 表面销毁、协议切换或窗口关闭时，必须先停止并释放对应播放器 / 解码器，再释放表面引用；任一时刻只允许当前活动会话向可见视频表面输出。Android 9 的 `KEY_OPERATING_RATE`、低延迟和丢帧提示属于可选能力，必须按平台 / 厂商探针启用；若日志显示 vendor 不支持，默认格式不得携带这些键。
+6. 表面销毁、协议切换或窗口关闭时，必须先停止并释放对应播放器 / 解码器，再释放表面引用；任一时刻只允许当前活动会话向可见视频表面输出。跨 Activity 的 `SurfaceView` 必须视为不同的 BufferQueue：网络 Media3 输出在交接前通过 `Renderer.MSG_SET_VIDEO_OUTPUT(null)` 发送到播放线程并等待 `blockUntilDelivered` 确认，Android 9 厂商 codec 走释放 / 重建路径，禁止依赖 `MediaCodec.setOutputSurface()` 热切换；目标 Surface 创建后重新绑定，并等待播放线程确认同一 Surface 输出消息已处理后，才允许提交窗口令牌。仅 `Surface.isValid` 不构成接管确认。AirPlay 手写解码器同样只能在新 Surface 上用下一关键帧重建，并确认当前 Holder / Surface 身份后再提交令牌。Android 9 的 `KEY_OPERATING_RATE`、低延迟和丢帧提示属于可选能力，必须按平台 / 厂商探针启用；若日志显示 vendor 不支持，默认格式不得携带这些键。
 7. 验证方式：普通 SDR H.264 视频必须在实体屏幕出现连续动态画面；日志应同时出现编码尺寸、Surface buffer geometry、实际 codec 名称和首个解码输出；`SurfaceFlinger` 中活动视频层应为 `Device` 合成且缓冲持续入队。系统截图无法捕获硬件视频层，截图黑色不得作为失败证据。
 8. 适用边界：本规则只约束当前 Android 9 高通车机的厂商显示栈。HDR、DRM、损坏媒体和发送端只输出音频必须分别验证，不得由 SDR 合成成功直接推定。
 
@@ -52,12 +52,12 @@
 ## 6. 公开任务窗口交接规则
 
 1. 触发条件：车机需要在标准自由窗口和全屏任务之间切换，且媒体服务不能因来源 Activity 的 `onStop` 被误停。
-2. Activity 只能通过 `CastWindowNavigator` 发起切换；Navigator 负责公开 `Intent`、`ActivityOptions.setLaunchBounds`、任务 flag 和失败恢复，服务只负责在交接期间维持媒体生命周期。
-3. 每次交接必须生成唯一令牌并写入目标 intent；目标只能完成同令牌交接，迟到 intent、旧超时和旧取消不得影响更新的交接。令牌只表达“媒体生命周期正在跨窗口交接”，不得携带来源任务身份，也不得让服务成为第二个窗口导航器。
-4. 标准窗口进入全屏时必须直接提交新的独立全屏任务，由系统自然把标准任务置于后台；禁止先调用 `moveTaskToBack(true)` 串行等待标准窗口退场。全屏返回时以 `REORDER_TO_FRONT` 复用标准任务，目标启动调用成功后由全屏来源 Activity 调用 `finishAndRemoveTask()` 结束并移除自身。后台全屏 Activity / 任务不得常驻；Android 9 HWC 视频层不能以任务进入后台作为可靠隐藏边界。禁止由目标 Activity 或服务扫描 `ActivityManager.appTasks / RecentTaskInfo` 来寻找来源任务。
-5. 目标启动和来源结束必须使用两个错误边界。目标启动失败时取消令牌并保留仍存活的来源窗口；目标已经成功提交后，来源结束失败只记录诊断，不能调用失败 UI、不能停止媒体，也不能向用户显示切换失败 Toast。
+2. Activity 只能通过 `CastWindowNavigator` 发起切换；Navigator 负责公开 `Intent`、`ActivityOptions.setLaunchBounds`、任务 flag 和启动失败处理，服务只负责在交接期间先完成媒体输出摘除、维持媒体生命周期，并在令牌有效期内保存一次性来源退出动作。
+3. 每次交接必须生成唯一令牌并写入目标 intent；目标只能在对应输出 Surface 有效、且 renderer 已确认同一 Surface 输出消息完成后，完成同令牌交接，迟到 intent、旧超时和旧取消不得影响更新的交接。令牌只表达“媒体生命周期正在跨窗口交接”，不得携带来源任务身份，也不得让服务成为第二个窗口导航器。
+4. 标准窗口进入全屏时必须直接提交新的独立全屏任务，由系统自然把标准任务置于后台；禁止先调用 `moveTaskToBack(true)` 串行等待标准窗口退场。全屏返回时以 `REORDER_TO_FRONT` 复用标准任务，必须先由目标完成对应输出 Surface 与 renderer 的接管确认并完成令牌，再由全屏来源 Activity 调用 `finishAndRemoveTask()` 结束并移除自身。后台全屏 Activity / 任务不得常驻；Android 9 HWC 视频层不能以任务进入后台作为可靠隐藏边界。禁止由目标 Activity 或服务扫描 `ActivityManager.appTasks / RecentTaskInfo` 来寻找来源任务。
+5. 目标启动和来源结束必须使用两个错误边界。媒体输出摘除未收到播放线程确认时不得启动目标；目标启动失败时取消令牌、恢复仍存活来源的 Surface 并保留来源窗口；目标已完成有效 Surface 接管后，来源结束失败只记录诊断，不能调用失败 UI、不能停止媒体，也不能向用户显示切换失败 Toast。
 6. 来源 Activity 的 `onStop` 只消费一次自己发起的交接，不把“当前是否有任意交接”当作停止条件。服务未绑定时窗口切换控件必须不可用，不排队旧点击；三秒未确认时服务只停止接收并释放令牌，不启动、移动或回收 Activity 任务。
-7. 验证方式：纯策略单测覆盖一次性全屏任务、标准任务复用、目标启动失败不结束来源、来源结束失败不否定目标启动和令牌过期；`lintDebug` 的 `NewApi` 检查不得在窗口主链出现 API 28 以上调用。窗口边界、点击响应、播放连续性、全屏残影和端口持续监听由用户按手测用例确认，AI 不默认执行交互 smoke。
+7. 验证方式：纯策略单测覆盖一次性全屏任务、标准任务复用、目标启动失败不结束来源、目标就绪前不退出来源、当前令牌完成时来源退出只执行一次、取消 / 超时不执行退出、同一 Holder 不重复提交 Surface，以及网络输出等待 renderer detach acknowledgement、目标 renderer 输出 acknowledgement、镜像禁止 `setOutputSurface`；`lintDebug` 的 `NewApi` 检查不得在窗口主链出现 API 29 以上调用。窗口边界、点击响应、播放连续性、全屏残影和端口持续监听由用户按手测用例确认，AI 不默认执行交互 smoke。
 8. 全屏窗口进入 `onStart` 后必须发现并绑定版本 `1` 的 `ACQUIRE_FULL_DISPLAY_OCCUPANCY_LEASE` provider，`onStop` / `onDestroy` 必须幂等释放；绑定本身是歌词避让状态，不携带播放器、媒体或窗口控制 Binder 方法，也不写死接收应用包名。
 9. 适用边界：仅适用于本项目的标准浮窗 / 全屏双任务模型；不引入车厂私有窗口接口，不推广到画中画或多窗口编排。
 
@@ -90,7 +90,7 @@
 2. AirPlay `/info` 对外宣告的 `width / height / widthPixels / heightPixels / edid` 必须描述目标物理面板；`refreshRate` 表示面板刷新率，`maxFPS` 表示接收端可稳定承载的编码帧率，二者必须分别维护。`maxFPS` 必须同时受实际硬件解码能力和物理刷新率约束；目标 `S56_HQX` 的 1080p H.264 / HEVC 硬件能力高于 `60 fps`，因此当前对外上限为 `60`，但发送端可以按网络与内容选择更低帧率。解码器尺寸上限只用于本地解码器启动和失败诊断，不得反向缩小接收器的显示能力声明。显示 `uuid` 必须按接收器硬件首次生成并持久化，不能在多台设备间复用固定值，也不能因网络接口切换而变化。
 3. 能力宣告和实际解码必须复用同一次 `REGULAR_CODECS` 候选快照，不得分别依赖 codec 列表的首个条目。Android 9 厂商 codec 的静态 `VideoCapabilities`、`colorFormats` 和帧率范围只作为排序与诊断信息，不能作为 Surface 解码硬门禁；目标车机已取证的 `OMX.qcom.*` 即使报告 `256x256` 或未列出 `COLOR_FormatSurface`，也必须保留并用真实 `MediaCodec.configure(format, Surface)` / `start()` 验证。Android 9 的 `OMX.qcom.*` 按硬件解码器识别，`OMX.google.* / c2.android.*` 按软件解码器识别；实际启动按同一快照逐个使用 codec 名称尝试硬件候选，必要时去除可选实时参数后重试。H.265 只在存在硬件 HEVC 候选时对外开启；对外 `maxFPS` 由物理面板刷新率和候选吞吐的已知上限取值，静态帧率未知时不得把未知误写成 `30`。软件兼容路径仅允许最长边不超过 `1280`、最短边不超过 `720`；在实际输入帧率尚未观测时可以启动小流，观测到超过 `30 fps` 后必须停止软件路径并保留可观测错误；1080p 镜像硬件启动失败时禁止静默落入软件解码。
 4. AirPlay RTP 回调中的编码帧尺寸同时用于配置解码器和 SurfaceView 的像素比例；源桌面尺寸只作为诊断信息，不能在 UI 层替代编码帧比例或凭固定 `16:9` 覆盖发送端比例。编码尺寸变化后必须等待下一关键帧重建解码器。
-5. 镜像开始 / 结束必须使用 native `mirror_video_running` 生命周期作为权威会话信号；镜像开始、尺寸、视频帧和结束回调都必须携带单调递增的原生镜像流令牌，旧代次事件不得改写新会话。开始与尺寸控制回调必须在返回 native 线程前完成主线程会话归并，确保首个携带 SPS/PPS/VPS 的访问单元不会抢跑；视频帧只接受当前 token。尺寸头先到时不得回退到上一代比例，必须先激活或缓存该 token 后再配置解码器。通用 HTTP 连接销毁只能作为可取消的短暂确认兜底，不能用连接计数推断发送端仍在播放。新镜像开始和输出释放必须清空旧尺寸 / 比例并丢弃迟到帧；同一镜像流跨窗口交接时保留 token 与编码尺寸，MediaCodec 直接切换到新 `SurfaceView`，厂商实现拒绝 `setOutputSurface` 时停止旧 Codec 并用有界保存的完整启动帧重建。
+5. 镜像开始 / 结束必须使用 native `mirror_video_running` 生命周期作为权威会话信号；镜像开始、尺寸、视频帧和结束回调都必须携带单调递增的原生镜像流令牌，旧代次事件不得改写新会话。开始与尺寸控制回调必须在返回 native 线程前完成主线程会话归并，确保首个携带 SPS/PPS/VPS 的访问单元不会抢跑；视频帧只接受当前 token。尺寸头先到时不得回退到上一代比例，必须先激活或缓存该 token 后再配置解码器。通用 HTTP 连接销毁只能作为可取消的短暂确认兜底，不能用连接计数推断发送端仍在播放。新镜像开始和输出释放必须清空旧尺寸 / 比例并丢弃迟到帧；同一镜像流跨窗口交接时保留 token 与编码尺寸，先摘除旧 `SurfaceView` 并停止旧 Codec，再用有界保存的完整启动帧在目标 Surface 上重建，禁止把 `MediaCodec.setOutputSurface()` 当作跨 BufferQueue 的可靠路径。
 6. DLNA XML 层保留发送端 `protocolInfo` 原文；播放器边界统一解析高置信 MIME（含 HLS），对 DLNA 的未知 progressive extractor 失败最多执行一次 HLS 重试，第二次失败必须保留可观测错误并交给现有错误状态机。
 7. 验证方式：`VideoDecodePolicyTest`、`MediaMimeResolverTest` 与直接相关 DLNA SOAP 测试通过，Debug 构建和原生编译通过；日志应能看到显示配置、解码候选快照、实际 codec 名称、RTP 源 / 编码尺寸和 Media3 实际 MIME。真实 Mac 扩展显示、分辨率切换、全屏交接和 Apple 设备跨会话恢复仍由用户在目标设备验收。
 8. 适用边界：当前目标固定为 `S56_HQX`、Android 9、`1920x1080`；该规则不宣称绕过 DRM、不引入转码服务器，也不允许在缺乏发送端证据时修改 AirPlay 型号或 feature bits。

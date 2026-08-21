@@ -52,6 +52,7 @@ import com.ninepointnine.desktopcast.session.CastProtocol
 import com.ninepointnine.desktopcast.session.CastSessionState
 import com.ninepointnine.desktopcast.window.CastWindowMode
 import com.ninepointnine.desktopcast.window.CastWindowNavigator
+import com.ninepointnine.desktopcast.window.isWindowHandoffOutputReady
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -113,7 +114,7 @@ open class MainActivity : AppCompatActivity() {
             bound = true
             binding.mediaControlView.player = service.mediaControlPlayer
             attachSurfaces(service)
-            windowNavigator.completeHandoffIfRequested(intent)
+            completeHandoffWhenOutputReady()
             collectService(service)
             observeCommercialSnapshots()
             service.startCasting()
@@ -169,7 +170,7 @@ open class MainActivity : AppCompatActivity() {
         setIntent(intent)
         syncFullscreenControlState()
         castService?.let(::attachSurfaces)
-        windowNavigator.completeHandoffIfRequested(intent)
+        completeHandoffWhenOutputReady()
         commercialController?.let { CommercialVariantUi.handleDebugIntent(this, intent, it) }
     }
 
@@ -479,6 +480,7 @@ open class MainActivity : AppCompatActivity() {
                 mirrorSurfaceHolder = holder
                 val frame = holder.surfaceFrame
                 castService?.setMirrorSurface(holder, frame.width(), frame.height())
+                completeHandoffWhenOutputReady()
             }
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -486,6 +488,7 @@ open class MainActivity : AppCompatActivity() {
                 // without recreating it. Re-advertise the holder so a new
                 // Activity surface can replace the old codec output target.
                 if (holder.surface.isValid) castService?.setMirrorSurface(holder, width, height)
+                completeHandoffWhenOutputReady()
                 refitVisibleSurfaces()
             }
 
@@ -500,10 +503,11 @@ open class MainActivity : AppCompatActivity() {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 mediaSurfaceHolder = holder
                 castService?.setMediaSurface(holder)
+                completeHandoffWhenOutputReady()
             }
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-                if (holder.surface.isValid) castService?.setMediaSurface(holder)
+                completeHandoffWhenOutputReady()
                 refitVisibleSurfaces()
             }
 
@@ -524,6 +528,27 @@ open class MainActivity : AppCompatActivity() {
         mediaSurfaceHolder
             ?.takeIf { it.surface.isValid }
             ?.let(service::setMediaSurface)
+    }
+
+    private fun completeHandoffWhenOutputReady() {
+        val service = castService ?: return
+        val content = service.sessionState.value.content
+        val targetHolder = when (content) {
+            CastContentKind.MIRROR -> mirrorSurfaceHolder
+            CastContentKind.NETWORK_VIDEO -> mediaSurfaceHolder
+            CastContentKind.NONE,
+            CastContentKind.AUDIO,
+            CastContentKind.IMAGE,
+            -> null
+        }
+        val outputReady = isWindowHandoffOutputReady(
+            content = content,
+            mirrorSurfaceReady = mirrorSurfaceHolder?.surface?.isValid == true,
+            mediaSurfaceReady = mediaSurfaceHolder?.surface?.isValid == true,
+        )
+        if (outputReady && windowNavigator.completeHandoffIfRequested(intent, targetHolder)) {
+            renderState(service.sessionState.value)
+        }
     }
 
     private fun collectService(service: CastService) {

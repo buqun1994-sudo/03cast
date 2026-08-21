@@ -178,6 +178,28 @@ class VideoDecodePolicyTest {
     }
 
     @Test
+    fun recreatesCodecForAndroid9VendorSurfaceHandoff() {
+        assertTrue(
+            SurfaceHandoffPolicy.forceCodecRecreate(
+                sdkInt = 28,
+                codecName = "OMX.qcom.video.decoder.avc",
+            ),
+        )
+        assertFalse(
+            SurfaceHandoffPolicy.forceCodecRecreate(
+                sdkInt = 28,
+                codecName = "OMX.google.h264.decoder",
+            ),
+        )
+        assertFalse(
+            SurfaceHandoffPolicy.forceCodecRecreate(
+                sdkInt = 29,
+                codecName = "OMX.qcom.video.decoder.avc",
+            ),
+        )
+    }
+
+    @Test
     fun allowsPortraitSoftwareMirrorWithinSamePixelBoundary() {
         assertTrue(VideoDecodePolicy.allowsSoftwareMirror(720, 1280, 30))
     }

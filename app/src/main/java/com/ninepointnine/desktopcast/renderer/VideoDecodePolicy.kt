@@ -150,6 +150,18 @@ internal object VideoDecodePolicy {
     ): Boolean = hardwareCandidates(candidatesByMime[mimeType].orEmpty()).isNotEmpty()
 }
 
+/**
+ * Android 9 vendor MediaCodec implementations on this receiver cannot safely
+ * switch a decoder from one Activity-owned Surface BufferQueue to another.
+ * The renderer must release and recreate the codec for that boundary.
+ */
+internal object SurfaceHandoffPolicy {
+    fun forceCodecRecreate(sdkInt: Int, codecName: String): Boolean =
+        sdkInt == 28 &&
+            !codecName.startsWith("OMX.google.") &&
+            !codecName.startsWith("c2.android.")
+}
+
 internal fun MirrorDecoderProfile.codecSummaryForRuntime(): String =
     candidatesByMime.entries.joinToString(separator = ";") { (mime, candidates) ->
         "$mime=${candidates.joinToString(",") { candidate ->

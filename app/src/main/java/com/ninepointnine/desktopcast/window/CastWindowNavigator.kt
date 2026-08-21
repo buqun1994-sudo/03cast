@@ -6,6 +6,7 @@ import android.app.ActivityOptions
 import android.content.Intent
 import android.graphics.Rect
 import android.util.Log
+import android.view.SurfaceHolder
 import com.ninepointnine.desktopcast.FullscreenActivity
 import com.ninepointnine.desktopcast.MainActivity
 import com.ninepointnine.desktopcast.realDisplaySize
@@ -19,7 +20,7 @@ enum class CastWindowMode {
 data class CastWindowTransition(
     val target: CastWindowMode,
     val reuseTargetTask: Boolean,
-    val retireSourceAfterLaunch: Boolean,
+    val retireSourceAfterTargetReady: Boolean,
 )
 
 object CastWindowPolicy {
@@ -27,21 +28,19 @@ object CastWindowPolicy {
         CastWindowMode.STANDARD -> CastWindowTransition(
             target = CastWindowMode.FULLSCREEN,
             reuseTargetTask = false,
-            retireSourceAfterLaunch = false,
+            retireSourceAfterTargetReady = false,
         )
         CastWindowMode.FULLSCREEN -> CastWindowTransition(
             target = CastWindowMode.STANDARD,
             reuseTargetTask = true,
-            retireSourceAfterLaunch = true,
+            retireSourceAfterTargetReady = true,
         )
     }
 }
 
 internal fun executeWindowTransition(
     launchTarget: () -> Unit,
-    retireSource: () -> Unit,
     onTargetLaunchFailure: (RuntimeException) -> Unit,
-    onSourceRetirementFailure: (RuntimeException) -> Unit,
 ): Boolean {
     try {
         launchTarget()
@@ -50,12 +49,18 @@ internal fun executeWindowTransition(
         return false
     }
 
+    return true
+}
+
+internal fun executeSourceRetirement(
+    retireSource: () -> Unit,
+    onFailure: (RuntimeException) -> Unit,
+) {
     try {
         retireSource()
     } catch (error: RuntimeException) {
-        onSourceRetirementFailure(error)
+        onFailure(error)
     }
-    return true
 }
 
 /**
@@ -72,14 +77,34 @@ class CastWindowNavigator(
     private var outgoingToken: Long? = null
 
     val isTransitionPending: Boolean
-        get() = outgoingToken != null
+        get() = outgoingToken != null || activity.intent.hasExtra(EXTRA_WINDOW_HANDOFF_TOKEN)
 
     fun switchMode() {
-        if (outgoingToken != null) return
+        if (isTransitionPending) return
         val service = serviceProvider() ?: return onFailure()
         val transition = CastWindowPolicy.transitionFrom(mode)
         val serviceIntent = Intent(activity, CastService::class.java)
-        val token = service.beginWindowHandoff()
+        val sourceRetirement: (() -> Unit)? = if (transition.retireSourceAfterTargetReady) {
+            {
+                executeSourceRetirement(
+                    retireSource = {
+                        if (!activity.isFinishing && !activity.isDestroyed) {
+                            activity.finishAndRemoveTask()
+                        }
+                    },
+                    onFailure = { error ->
+                        Log.w(TAG, "Window handoff source retirement failed: $mode", error)
+                    },
+                )
+            }
+        } else {
+            null
+        }
+        val token = service.beginWindowHandoff(sourceRetirement) ?: run {
+            Log.w(TAG, "Window handoff preflight rejected: $mode")
+            onFailure()
+            return
+        }
         outgoingToken = token
 
         val targetLaunched = executeWindowTransition(
@@ -90,16 +115,8 @@ class CastWindowNavigator(
                     .setLaunchBounds(targetBounds(transition.target))
                 activity.startActivity(nextIntent, options.toBundle())
             },
-            retireSource = {
-                if (transition.retireSourceAfterLaunch && !activity.isFinishing) {
-                    activity.finishAndRemoveTask()
-                }
-            },
             onTargetLaunchFailure = { error ->
                 Log.w(TAG, "Window handoff target launch failed: ${transition.target}", error)
-            },
-            onSourceRetirementFailure = { error ->
-                Log.w(TAG, "Window handoff source retirement failed: $mode", error)
             },
         )
         if (targetLaunched) {
@@ -112,16 +129,21 @@ class CastWindowNavigator(
         onFailure()
     }
 
-    fun completeHandoffIfRequested(intent: Intent) {
+    fun completeHandoffIfRequested(
+        intent: Intent,
+        targetHolder: SurfaceHolder? = null,
+    ): Boolean {
         val token = intent.getLongExtra(EXTRA_WINDOW_HANDOFF_TOKEN, NO_TOKEN)
-        if (token == NO_TOKEN) return
-        val service = serviceProvider() ?: return
-        if (service.completeWindowHandoff(token)) {
+        if (token == NO_TOKEN) return false
+        val service = serviceProvider() ?: return false
+        val completed = service.completeWindowHandoff(token, targetHolder)
+        if (completed) {
             Log.i(TAG, "Window handoff confirmed: $token")
             activity.stopService(Intent(activity, CastService::class.java))
         }
         outgoingToken = null
         intent.removeExtra(EXTRA_WINDOW_HANDOFF_TOKEN)
+        return completed
     }
 
     /** The source Activity consumes this once from onStop to preserve playback. */

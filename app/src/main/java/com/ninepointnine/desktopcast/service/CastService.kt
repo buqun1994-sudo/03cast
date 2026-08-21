@@ -155,23 +155,33 @@ class CastService : LifecycleService() {
         handleLanAddress(networkMonitor.currentAddress())
     }
 
-    fun beginWindowHandoff(): Long {
+    fun beginWindowHandoff(sourceRetirement: (() -> Unit)? = null): Long? {
         checkMainThread()
+        if (!playback.prepareWindowHandoff()) {
+            Log.w(TAG, "Window handoff refused: media output did not detach cleanly")
+            return null
+        }
         clearWindowHandoffTimeout()
-        val token = windowHandoff.begin()
+        val token = windowHandoff.begin(sourceRetirement ?: {})
         windowHandoffTimeout = Runnable {
             if (!windowHandoff.timeout(token)) return@Runnable
             windowHandoffTimeout = null
             Log.w(TAG, "Window handoff timed out: $token")
+            playback.restoreWindowHandoffOutput()
             stopCasting()
             stopSelf()
         }.also { mainHandler.postDelayed(it, WINDOW_HANDOFF_TIMEOUT_MS) }
         return token
     }
 
-    fun completeWindowHandoff(token: Long): Boolean {
+    fun completeWindowHandoff(token: Long, targetHolder: SurfaceHolder? = null): Boolean {
         checkMainThread()
-        if (!windowHandoff.complete(token)) return false
+        if (!windowHandoff.isActive) return false
+        if (!playback.confirmWindowHandoffOutput(sessionState.value.content, targetHolder)) {
+            Log.w(TAG, "Window handoff target output not acknowledged: $token")
+            return false
+        }
+        if (!windowHandoff.complete(token, playback::commitWindowHandoffOutput)) return false
         clearWindowHandoffTimeout()
         return true
     }
@@ -179,6 +189,7 @@ class CastService : LifecycleService() {
     fun cancelWindowHandoff(token: Long): Boolean {
         checkMainThread()
         if (!windowHandoff.cancel(token)) return false
+        playback.restoreWindowHandoffOutput()
         clearWindowHandoffTimeout()
         return true
     }

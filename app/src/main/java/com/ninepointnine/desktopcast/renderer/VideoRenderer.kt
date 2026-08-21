@@ -24,6 +24,7 @@ class VideoRenderer {
     private var codec: MediaCodec? = null
     private var displayHolder: SurfaceHolder? = null
     private var displaySurface: Surface? = null
+    private var handoffDisplayHolder: SurfaceHolder? = null
     private var requestedBufferWidth = 0
     private var requestedBufferHeight = 0
     private var bufferGeometryReady = false
@@ -109,10 +110,10 @@ class VideoRenderer {
     }
 
     /**
-     * Binds the decoder to the current window surface. Android 9 exposes
-     * setOutputSurface(), but a few vendor codec builds reject it while a
-     * buffer is being drained; the fallback is a clean codec restart at the
-     * next keyframe rather than leaving the old surface black.
+     * Binds the decoder to the current window surface. A SurfaceView from a
+     * different Activity owns a different BufferQueue, so the codec is always
+     * recreated at the next retained keyframe instead of calling
+     * MediaCodec.setOutputSurface() across queues.
      */
     fun setSurface(
         holder: SurfaceHolder,
@@ -145,22 +146,12 @@ class VideoRenderer {
 
         val activeCodec = codec
         if (activeCodec != null) {
-            if (!bufferGeometryReady) {
-                // Wait for the matching surfaceChanged callback before
-                // rebinding; otherwise Android 9 vendors may retain the old
-                // BufferQueue geometry.
-                stopCodec()
-                return@synchronized
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                try {
-                    activeCodec.setOutputSurface(surface)
-                    Log.i(TAG, "Mirror codec output surface rebound")
-                    return@synchronized
-                } catch (error: Exception) {
-                    Log.w(TAG, "Codec surface rebind rejected; waiting for keyframe", error)
-                }
-            }
+            // Even when the framework call returns successfully, the target
+            // Qualcomm build can fail later while queueing a buffer from the
+            // old Surface. Releasing here makes the handoff synchronous from
+            // this renderer's point of view and lets the next keyframe rebuild
+            // the codec on the new queue.
+            Log.i(TAG, "Mirror Surface changed; recreating codec for new BufferQueue")
             stopCodec()
         }
         if (bufferGeometryReady) drainPendingKeyframe()
@@ -178,6 +169,54 @@ class VideoRenderer {
         // SurfaceView destroys its BufferQueue, otherwise the next window can
         // inherit a stale producer and remain black.
         stopCodec()
+    }
+
+    /** Confirms that this exact Activity Surface is the current mirror target. */
+    fun isSurfaceBound(holder: SurfaceHolder): Boolean = synchronized(lock) {
+        val surface = holder.surface
+        displayHolder === holder && displaySurface === surface && surface.isValid
+    }
+
+    /** Stops the mirror codec before the source Activity can destroy its queue. */
+    fun detachSurfaceForWindowHandoff() = synchronized(lock) {
+        handoffDisplayHolder = displayHolder
+        displayHolder = null
+        displaySurface = null
+        requestedBufferWidth = 0
+        requestedBufferHeight = 0
+        bufferGeometryReady = false
+        bufferGeometryRequestPending = false
+        stopCodec()
+        Log.i(TAG, "Mirror video output detached before window handoff")
+    }
+
+    /** Restores the source mirror Surface when a target Activity was rejected. */
+    fun restoreSurfaceAfterWindowHandoff() = synchronized(lock) {
+        val sourceHolder = handoffDisplayHolder ?: return@synchronized
+        handoffDisplayHolder = null
+        if (displayHolder === sourceHolder) return@synchronized
+        if (displayHolder != null) {
+            displayHolder = null
+            displaySurface = null
+            requestedBufferWidth = 0
+            requestedBufferHeight = 0
+            bufferGeometryReady = false
+            bufferGeometryRequestPending = false
+            stopCodec()
+        }
+        if (!sourceHolder.surface.isValid) return@synchronized
+        displayHolder = sourceHolder
+        displaySurface = sourceHolder.surface
+        bufferGeometryRequestPending = videoWidth > 0 && videoHeight > 0
+        requestedBufferWidth = 0
+        requestedBufferHeight = 0
+        updateBufferGeometryState(sourceHolder, 0, 0)
+        Log.i(TAG, "Mirror video output restored after cancelled window handoff")
+    }
+
+    /** Drops the retained source reference once the target Surface is active. */
+    fun commitSurfaceWindowHandoff() = synchronized(lock) {
+        handoffDisplayHolder = null
     }
 
     /**
@@ -616,6 +655,7 @@ class VideoRenderer {
         reset()
         displayHolder = null
         displaySurface = null
+        handoffDisplayHolder = null
     }
 
     private fun observeInputRate(ntpTimeNs: Long): Int? {

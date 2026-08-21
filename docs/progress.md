@@ -67,6 +67,12 @@
 3. 已验证：直接相关的窗口交接、窗口策略和商业布局契约单测通过；Staging `assembleDebug` 构建成功，APK 包名为 `com.ninepointnine.desktopcast`，实际 v2 签名证书 SHA-256 为 `98740B95C30064F727B9401A851ECF2E576D5E5C38FCC318284578747BA50E2A`；已通过 install-only 覆盖安装到 `192.168.0.203:5555 / S56_HQX`，未启动应用。
 4. 已验收：用户在目标车机手动验证窗口切换通过，浮窗 / 全屏往返已恢复到记忆中近似的流畅度，未再出现后台常驻全屏窗口造成的残留画面。本轮按用户要求未执行自动交互冒烟；设置、权益页、关于页与行车协议二维码仅复用布局契约测试结论，不冒充人工验收。
 
+## 2026-08-21 哔哩哔哩窗口交接解码错误
+
+1. 已取证并收敛根因：哔哩哔哩 DLNA `video/mp4` AVC 使用 `OMX.qcom.video.decoder.avc`；切换时先出现 `Failed to qbuf to driver`、`failed to fill output buffer`、`OMX_ErrorHardware`，随后 `MediaCodecVideoDecoderException` 与 `Surface: getSlotFromBufferLocked: unknown buffer`。没有 HTTP、DLNA SOAP、URL 失效或发送端撤流证据，故根因是 Android 9 高通 codec 在跨 Activity SurfaceView 的 BufferQueue 上异步热切输出不安全。
+2. 已施工底层交接：`NetworkMediaPlayer` 为 Android 9 厂商 codec 强制 Media3 release/recreate 路径，并在窗口启动前通过播放线程 `Renderer.MSG_SET_VIDEO_OUTPUT(null)` + `blockUntilDelivered` 确认旧输出已摘除；`VideoRenderer` 同样停止旧 codec、保留有限关键帧后在目标 Surface 重建。`CastPlaybackRouter` / `CastService` 负责统一 preflight、目标失败恢复和成功提交，未增加第二播放器、固定延时或常驻窗口。
+3. 已补充：窗口策略、Android 9 codec 策略、renderer detach acknowledgement、取消 / 超时恢复和同一 Holder 幂等绑定单测；代码规则、验证矩阵、长期总纲和施工方案已同步“禁止跨 BufferQueue `setOutputSurface`”的不变量。Staging 构建与目标车机覆盖安装待本轮机器检查完成后记录，交互结果由用户手测确认。
+
 ## 2026-08-20 等待页商业呈现调整
 
 1. 已完成：Trial 等待态移除“当前可以投屏”，改为显示剩余试用时间和服务端报价驱动的长购买广告；原价在广告中使用删除线，点击整句进入购买流程。
@@ -96,3 +102,16 @@
 4. 已完成：production 签名入口改为 `deviceCommerceProductionSigningPropertiesFile` 外部注入，并将 `*.jks`、`*.keystore`、`keystore.properties`、`signing.properties` 加入忽略规则。
 5. 待完成：cloud 注入新证书摘要与 trust bundle；新包在 `S56_HQX` 的 `CAR_POWERTRAIN` 授权复验；新包单独的真实 DLNA / AirPlay、商业门禁和端口释放验收。
 6. 本轮边界：未安装新包、未卸载旧包、未清数据、未修改车机设置、未部署 cloud、未执行真实支付。
+
+## 2026-08-21 目标 Surface 接管确认施工
+
+1. 已完成：保留真实双 Activity / 双任务视觉模型，窗口令牌提交从“目标 Surface 有效”升级为“目标 Surface 有效且 renderer 已确认同一 Surface 输出消息在播放线程完成”；网络视频记录 Surface 身份与输出代次，镜像确认当前 Holder / Surface 身份。
+2. 已完成：目标接管失败、旧令牌、取消和超时均不会提交来源退出动作；网络媒体 `surfaceChanged` 仍不重复提交同一 Holder，Android 9 高通 codec 继续使用摘除后释放 / 重建路径，未增加 Bilibili 特判、固定延时、第二播放器或协议重连。
+3. 已同步：`docs/architecture/rules/code.md`、`docs/architecture/rules/testing.md`、项目长期总纲、V1 施工方案和验证矩阵均明确 renderer output acknowledgement 为窗口交接门槛。
+4. 已验证：`:app:testDebugUnitTest --rerun-tasks` 共 102 条通过、Staging `assembleDebug` 通过、项目就绪 / Skill 快检、`git diff --check` 和安装脚本语法检查通过；APK 包名为 `com.ninepointnine.desktopcast`，v2 签名证书 SHA-256 为 `98740b95c30064f727b9401a851ecf2e576d5e5c38fcc318284578747ba50e2a`，已通过 `install-only` 覆盖安装到 `S56_HQX`，未启动应用。`lintDebug` 仍被仓库既有 28 个错误和 84 个警告阻断，本轮新增交接路径无 `NewApi` 错误。真实视觉全屏、哔哩哔哩 DLNA 播放连续性和无残影由用户手测确认。
+
+## 2026-08-21 哔哩哔哩窗口切换稳定性验收
+
+1. 用户在目标车机多次手测哔哩哔哩 DLNA 播放中的“浮窗 -> 全屏 -> 浮窗”，确认不再出现“该内容暂时无法播放”，播放不中断，进程和接收服务保持正常。
+2. 切换期间仍会出现数秒级黑屏，但声音连续，随后画面恢复；该现象与 Android 9 高通 codec 在跨 Activity BufferQueue 上安全摘除并重建、等待下一组视频关键帧一致，不是网络断流、DLNA URL 失效或播放器崩溃。
+3. 本轮最终验收口径以稳定性优先：允许这段首帧等待，禁止播放中断、错误页、不可恢复黑屏、旧全屏残影和后台接收异常。零黑屏需要改为同一 Activity / 同一 Surface / 同一 codec 的窗口主链，超出本轮已接受范围，暂不施工。

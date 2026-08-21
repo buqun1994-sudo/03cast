@@ -1,5 +1,6 @@
 package com.ninepointnine.desktopcast.window
 
+import com.ninepointnine.desktopcast.session.CastContentKind
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -7,33 +8,57 @@ import java.util.concurrent.atomic.AtomicLong
  * Activity intent harmless once a newer handoff has started or timed out.
  */
 class CastWindowHandoff {
-    private var activeToken: Long? = null
+    private var activeHandoff: ActiveHandoff? = null
 
-    val isActive: Boolean get() = activeToken != null
+    val isActive: Boolean get() = activeHandoff != null
 
-    fun begin(): Long {
+    fun begin(onComplete: () -> Unit = {}): Long {
         val token = tokenSequence.incrementAndGet()
-        activeToken = token
+        activeHandoff = ActiveHandoff(token, onComplete)
         return token
     }
 
-    fun complete(token: Long): Boolean = clear(token)
+    fun complete(token: Long, beforeSourceRetirement: () -> Unit = {}): Boolean {
+        val handoff = activeHandoff?.takeIf { it.token == token } ?: return false
+        activeHandoff = null
+        beforeSourceRetirement()
+        handoff.onComplete()
+        return true
+    }
 
     fun cancel(token: Long): Boolean = clear(token)
 
     fun timeout(token: Long): Boolean = clear(token)
 
     fun clear() {
-        activeToken = null
+        activeHandoff = null
     }
 
     private fun clear(token: Long): Boolean {
-        if (activeToken != token) return false
-        activeToken = null
+        if (activeHandoff?.token != token) return false
+        activeHandoff = null
         return true
     }
+
+    private data class ActiveHandoff(
+        val token: Long,
+        val onComplete: () -> Unit,
+    )
 
     private companion object {
         val tokenSequence = AtomicLong()
     }
+}
+
+internal fun isWindowHandoffOutputReady(
+    content: CastContentKind,
+    mirrorSurfaceReady: Boolean,
+    mediaSurfaceReady: Boolean,
+): Boolean = when (content) {
+    CastContentKind.MIRROR -> mirrorSurfaceReady
+    CastContentKind.NETWORK_VIDEO -> mediaSurfaceReady
+    CastContentKind.NONE,
+    CastContentKind.AUDIO,
+    CastContentKind.IMAGE,
+    -> true
 }
