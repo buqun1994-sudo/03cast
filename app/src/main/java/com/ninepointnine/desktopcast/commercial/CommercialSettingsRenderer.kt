@@ -102,6 +102,7 @@ class CommercialSettingsRenderer(
     private var summaryVisibleForSection = true
     private var accentColor = color(R.color.settings_accent)
     private var accentTextColor = color(R.color.commercial_action_text)
+    private var accentSurfaceColor = accentColor
 
     init {
         summary.setOnClickListener { actions.onOpenEntitlement() }
@@ -143,6 +144,7 @@ class CommercialSettingsRenderer(
 
     fun render(state: CommercialUiState) {
         latestState = state
+        refreshResourceColors()
         renderEntitlement(state)
         renderQuote(state)
         renderRecovery(state.recovery, state.entitlement)
@@ -150,10 +152,15 @@ class CommercialSettingsRenderer(
         renderPaymentMethod(state)
     }
 
-    fun updateAccent(accentColor: Int, accentTextColor: Int) {
+    fun updateAccent(
+        accentColor: Int,
+        accentTextColor: Int,
+        accentSurfaceColor: Int,
+    ) {
         this.accentColor = accentColor
         this.accentTextColor = accentTextColor
-        summaryChevron.imageTintList = ColorStateList.valueOf(accentColor)
+        this.accentSurfaceColor = accentSurfaceColor
+        summaryChevron.imageTintList = ColorStateList.valueOf(accentSurfaceColor)
         summaryDiscount.backgroundTintList = ColorStateList.valueOf(accentColor)
         summaryDiscount.setTextColor(accentTextColor)
         marketingDiscount.backgroundTintList = ColorStateList.valueOf(accentColor)
@@ -163,6 +170,13 @@ class CommercialSettingsRenderer(
             action.setTextColor(accentTextColor)
         }
         renderPaymentMethod(latestState)
+        render(latestState)
+    }
+
+    private fun refreshResourceColors() {
+        orderBack.imageTintList = ColorStateList.valueOf(color(R.color.settings_text_primary))
+        discountInput.setTextColor(color(R.color.settings_text_primary))
+        discountInput.setHintTextColor(color(R.color.settings_text_secondary))
     }
 
     fun setSummaryVisibleForSection(visible: Boolean) {

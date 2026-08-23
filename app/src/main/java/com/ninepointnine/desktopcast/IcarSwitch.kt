@@ -36,7 +36,8 @@ class IcarSwitch @JvmOverloads constructor(
     private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = ContextCompat.getColor(context, R.color.cast_settings_switch_thumb)
     }
-    private val offTrackColor = ContextCompat.getColor(context, R.color.cast_settings_switch_track_off)
+    private var offTrackColor =
+        ContextCompat.getColor(context, R.color.cast_settings_switch_track_off)
     private val trackBounds = RectF()
     private var checked = false
     private var checkedChangeListener: OnCheckedChangeListener? = null
@@ -44,6 +45,14 @@ class IcarSwitch @JvmOverloads constructor(
     init {
         isClickable = true
         isFocusable = true
+    }
+
+    /** Applies the current day/night resources and iCAR accent without recreating the view. */
+    fun updateThemeColors(accentColor: Int, offTrackColor: Int, thumbColor: Int) {
+        this.accentColor = accentColor
+        this.offTrackColor = offTrackColor
+        thumbPaint.color = thumbColor
+        invalidate()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {

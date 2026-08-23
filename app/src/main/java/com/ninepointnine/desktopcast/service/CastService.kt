@@ -51,6 +51,7 @@ class CastService : LifecycleService() {
     private var safetySecondsRemaining = 0
     private var safetyStateCollector: Job? = null
     private var commercialAccessBoundaryReceiverRegistered = false
+    private var retainAcrossActivityRecreation = false
     private val coordinator = CastSessionCoordinator()
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     private val preferences by lazy { getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE) }
@@ -126,11 +127,18 @@ class CastService : LifecycleService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
-        if (!windowHandoff.isActive) stopCasting()
+        if (retainAcrossActivityRecreation) {
+            retainAcrossActivityRecreation = false
+        } else if (!windowHandoff.isActive) {
+            stopCasting()
+        }
         return super.onUnbind(intent)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        super.onStartCommand(intent, flags, startId)
+        return START_NOT_STICKY
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -153,6 +161,12 @@ class CastService : LifecycleService() {
         drivingStateMonitor.start()
         networkMonitor.start()
         handleLanAddress(networkMonitor.currentAddress())
+    }
+
+    /** Keeps the receiver alive while an Activity rebuilds for a theme change. */
+    fun retainAcrossActivityRecreation() {
+        checkMainThread()
+        retainAcrossActivityRecreation = true
     }
 
     fun beginWindowHandoff(sourceRetirement: (() -> Unit)? = null): Long? {

@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
  * obtain a lease here before changing playback, which keeps DLNA, AirPlay HLS,
  * mirroring and audio under one session authority.
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class CastPlaybackRouter internal constructor(
     context: Context,
     scope: CoroutineScope,

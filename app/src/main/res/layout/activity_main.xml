@@ -678,7 +678,7 @@
                     android:layout_height="56dp"
                     android:contentDescription="@string/driving_guard_warning_title"
                     android:src="@drawable/ic_safety"
-                    android:tint="@color/cast_danger" />
+                    app:tint="@color/cast_danger" />
 
                 <TextView
                     android:layout_width="match_parent"
@@ -783,7 +783,7 @@
                 android:layout_height="64dp"
                 android:contentDescription="@string/driving_safety_title"
                 android:src="@drawable/ic_safety"
-                android:tint="@color/cast_danger" />
+                app:tint="@color/cast_danger" />
 
             <TextView
                 android:layout_width="match_parent"
@@ -840,7 +840,7 @@
                 android:layout_weight="1"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:textColor="#BFFFFFFF"
+                android:textColor="@color/cast_control_title"
                 android:textSize="@dimen/cast_caption_size" />
         </LinearLayout>
 
@@ -871,6 +871,10 @@
             android:background="@android:color/transparent"
             app:animation_enabled="false"
             app:controller_layout_id="@layout/cast_media_control_view"
+            app:fullscreen_enter_icon="@drawable/ic_fullscreen"
+            app:fullscreen_exit_icon="@drawable/ic_fullscreen_exit"
+            app:pause_icon="@drawable/ic_pause"
+            app:play_icon="@drawable/ic_play"
             app:show_fastforward_button="false"
             app:show_next_button="false"
             app:show_previous_button="false"

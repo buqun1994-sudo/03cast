@@ -45,6 +45,8 @@ class CastCommercialWaitingRenderer(
     private val viewEntitlement: TextView =
         root.findViewById(R.id.cast_commercial_view_entitlement)
     private val retry: TextView = root.findViewById(R.id.cast_commercial_retry)
+    private var latestState = CommercialUiState()
+    private var accentSurfaceColor = ContextCompat.getColor(context, R.color.cast_accent)
 
     init {
         purchaseAd.setOnClickListener { actions.onBuyPro() }
@@ -53,7 +55,17 @@ class CastCommercialWaitingRenderer(
         retry.setOnClickListener { actions.onRetry() }
     }
 
+    /** Rebinds every waiting-page action to the current iCAR accent. */
+    fun updateAccent(accentColor: Int, accentSurfaceColor: Int) {
+        this.accentSurfaceColor = accentSurfaceColor
+        listOf(purchaseAd, buyPro, viewEntitlement, retry).forEach { action ->
+            action.setTextColor(accentSurfaceColor)
+        }
+        render(latestState)
+    }
+
     fun render(state: CommercialUiState) {
+        latestState = state
         panel.isVisible = state.entitlement !is EntitlementState.Pro
         proStatus.isVisible = false
         purchaseAd.isVisible = false
@@ -64,7 +76,11 @@ class CastCommercialWaitingRenderer(
         purchaseDetail.isVisible = false
         status.isVisible = true
         status.setTextColor(ContextCompat.getColor(context, R.color.cast_text_secondary))
+        detail.setTextColor(ContextCompat.getColor(context, R.color.cast_text_secondary))
         purchaseDetail.setTextColor(ContextCompat.getColor(context, R.color.cast_text_secondary))
+        listOf(purchaseAd, buyPro, viewEntitlement, retry).forEach {
+            it.setTextColor(accentSurfaceColor)
+        }
 
         when (val entitlement = state.entitlement) {
             EntitlementState.Checking -> {

@@ -9,6 +9,11 @@
     <color name="cast_control_scrim">#B3000000</color>
     <color name="cast_control_scrim_light">#66000000</color>
     <color name="cast_control_foreground">#FFFFFFFF</color>
+    <color name="cast_control_title">#BFFFFFFF</color>
+    <color name="cast_control_buffered">#99FFFFFF</color>
+    <color name="cast_control_unplayed">#66FFFFFF</color>
+    <color name="cast_control_buffered_audio">#99FFFFFF</color>
+    <color name="cast_control_unplayed_audio">#66FFFFFF</color>
     <color name="cast_error">#FFFF6673</color>
     <color name="cast_settings_sidebar_background">#EB151515</color>
     <color name="cast_settings_content_background_start">#FA0C0D0E</color>
@@ -21,4 +26,5 @@
     <color name="cast_dialog_scrim">#B3000000</color>
     <color name="cast_safety_background">#FF000000</color>
     <color name="cast_dialog_background">#FF1B1D25</color>
+    <bool name="cast_light_system_bars">false</bool>
 </resources>

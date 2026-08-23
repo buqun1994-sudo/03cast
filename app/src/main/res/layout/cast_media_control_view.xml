@@ -29,7 +29,7 @@
                 android:contentDescription="@string/play"
                 android:padding="@dimen/cast_media_secondary_icon_padding"
                 android:scaleType="fitCenter"
-                android:src="@drawable/exo_styled_controls_play" />
+                android:src="@drawable/ic_play" />
         </FrameLayout>
 
         <LinearLayout
@@ -58,13 +58,13 @@
                 android:layout_marginEnd="@dimen/cast_control_gap"
                 android:layout_weight="1"
                 app:bar_height="@dimen/cast_media_progress_bar_height"
-                app:buffered_color="#99FFFFFF"
+                app:buffered_color="@color/cast_control_buffered"
                 app:played_color="@color/cast_accent"
                 app:scrubber_color="@color/cast_accent"
                 app:scrubber_dragged_size="@dimen/cast_media_progress_thumb_dragged"
                 app:scrubber_enabled_size="@dimen/cast_media_progress_thumb"
                 app:touch_target_height="@dimen/cast_media_timeline_height"
-                app:unplayed_color="#66FFFFFF" />
+                app:unplayed_color="@color/cast_control_unplayed" />
 
             <TextView
                 android:id="@id/exo_duration"
@@ -91,7 +91,7 @@
                 android:contentDescription="@string/enter_fullscreen"
                 android:padding="@dimen/cast_media_secondary_icon_padding"
                 android:scaleType="fitCenter"
-                android:src="@drawable/exo_styled_controls_fullscreen_enter" />
+                android:src="@drawable/ic_fullscreen" />
         </FrameLayout>
     </LinearLayout>
 </merge>

@@ -4,13 +4,17 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.res.Configuration
 import android.content.res.ColorStateList
+import android.database.ContentObserver
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.RippleDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.View
@@ -56,6 +60,7 @@ import com.ninepointnine.desktopcast.window.isWindowHandoffOutputReady
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 open class MainActivity : AppCompatActivity() {
     protected open val isFullscreenWindow: Boolean = false
 
@@ -87,13 +92,26 @@ open class MainActivity : AppCompatActivity() {
     private var lastDrivingSafetyAlert: DrivingSafetyAlert? = null
     private var drivingSafetyExitHandled = false
     private var updatingDrivingGuard = false
-    private var rootBackgroundShowsSettings = false
     private var commercialRenderer: CommercialSettingsRenderer? = null
     private var commercialController: CommercialController? = null
     private lateinit var commercialWaitingRenderer: CastCommercialWaitingRenderer
     private var commercialState = CommercialUiState()
     private var drivingAgreementQrConfigured = false
     private var removeCommercialSnapshotListener: (() -> Unit)? = null
+    private var themePalette = IcarThemeColorPalette.resolve(null, false)
+    private var renderedNightMode = false
+    private var inflatedNightMode = false
+    private var themeRecreatePending = false
+    private var themeObserverRegistered = false
+    private var audioArtworkIsFallback = true
+    private var rootBackgroundMode: RootBackgroundMode? = null
+    private var serviceRetainedForConfiguration = false
+
+    private enum class RootBackgroundMode {
+        DEFAULT,
+        SETTINGS,
+        PLAYBACK_BLACK,
+    }
 
     private enum class SettingsSection {
         RECEIVER,
@@ -107,12 +125,19 @@ open class MainActivity : AppCompatActivity() {
         renderState(lastState)
     }
 
+    private val themeColorObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            refreshThemePalette()
+        }
+    }
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             val service = (binder as CastService.LocalBinder).service
             castService = service
             bound = true
             binding.mediaControlView.player = service.mediaControlPlayer
+            applyMediaControlColors()
             attachSurfaces(service)
             completeHandoffWhenOutputReady()
             collectService(service)
@@ -134,6 +159,14 @@ open class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        renderedNightMode = isNightMode()
+        inflatedNightMode = renderedNightMode
+        settingsVisible = savedInstanceState?.getBoolean(STATE_SETTINGS_VISIBLE) == true
+        serviceRetainedForConfiguration =
+            savedInstanceState?.getBoolean(STATE_SERVICE_RETAINED) == true
+        selectedSettingsSection = savedInstanceState?.getString(STATE_SETTINGS_SECTION)
+            ?.let { value -> SettingsSection.entries.firstOrNull { it.name == value } }
+            ?: SettingsSection.RECEIVER
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -151,6 +184,10 @@ open class MainActivity : AppCompatActivity() {
         configureCommercialWaitingUi()
         configureActions()
         configureSurfaces()
+        if (settingsVisible) {
+            ensureCommercialSettingsUi()
+            if (selectedSettingsSection == SettingsSection.ABOUT) ensureAboutUi()
+        }
         binding.root.addOnLayoutChangeListener { _, left, top, right, bottom,
                                                   oldLeft, oldTop, oldRight, oldBottom ->
             if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
@@ -162,7 +199,14 @@ open class MainActivity : AppCompatActivity() {
         renderDrivingGuard(isDrivingPlaybackGuardEnabled())
         renderDrivingState(DrivingState.UNAVAILABLE)
         commercialWaitingRenderer.render(commercialState)
+        refreshThemePalette()
         renderState(lastState)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (synchronizeThemeConfiguration(newConfig)) return
+        refreshThemePalette()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -176,6 +220,9 @@ open class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        registerThemeColorObserver()
+        if (synchronizeThemeConfiguration()) return
+        refreshThemePalette()
         syncFullscreenControlState()
         if (!bindingRequested) {
             bindingRequested = bindService(
@@ -186,7 +233,14 @@ open class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (synchronizeThemeConfiguration()) return
+        refreshThemePalette()
+    }
+
     override fun onStop() {
+        unregisterThemeColorObserver()
         mainHandler.removeCallbacks(hideControls)
         controlsOverlayRequested = false
         controlsOverlay?.dismiss()
@@ -195,7 +249,14 @@ open class MainActivity : AppCompatActivity() {
         collectors = null
         stopObservingCommercialSnapshots()
         if (bindingRequested) {
-            if (!windowNavigator.consumeOutgoingHandoff()) castService?.stopCasting()
+            val outgoingHandoff = windowNavigator.consumeOutgoingHandoff()
+            if (!isChangingConfigurations && !outgoingHandoff) {
+                castService?.stopCasting()
+                if (serviceRetainedForConfiguration) {
+                    stopService(Intent(this, CastService::class.java))
+                    serviceRetainedForConfiguration = false
+                }
+            }
             unbindService(connection)
             bindingRequested = false
             bound = false
@@ -205,9 +266,17 @@ open class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        unregisterThemeColorObserver()
         stopObservingCommercialSnapshots()
         commercialController?.close()
         super.onDestroy()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(STATE_SETTINGS_VISIBLE, settingsVisible)
+        outState.putString(STATE_SETTINGS_SECTION, selectedSettingsSection.name)
+        outState.putBoolean(STATE_SERVICE_RETAINED, serviceRetainedForConfiguration)
+        super.onSaveInstanceState(outState)
     }
 
     private fun configureCommercialWaitingUi() {
@@ -258,8 +327,9 @@ open class MainActivity : AppCompatActivity() {
             ),
         ).also { renderer ->
             renderer.updateAccent(
-                accentColor = ContextCompat.getColor(this, R.color.cast_accent),
-                accentTextColor = ContextCompat.getColor(this, R.color.commercial_action_text),
+                accentColor = themePalette.accentColor,
+                accentTextColor = themePalette.accentTextColor,
+                accentSurfaceColor = themePalette.accentSurfaceColor,
             )
             renderer.render(commercialState)
             renderer.setSummaryVisibleForSection(selectedSettingsSection != SettingsSection.COMMERCIAL)
@@ -357,6 +427,7 @@ open class MainActivity : AppCompatActivity() {
             binding.mediaControlView.findViewById(androidx.media3.ui.R.id.exo_fullscreen)
         binding.mediaControlView.setShowTimeoutMs(0)
         binding.mediaControlView.setAnimationEnabled(false)
+        applyMediaControlColors()
         syncFullscreenControlState()
         binding.mediaControlView.setOnFullScreenModeChangedListener {
             requestWindowSwitch()
@@ -561,8 +632,13 @@ open class MainActivity : AppCompatActivity() {
                 launch {
                     service.artwork.collect { bitmap ->
                         if (bitmap == null) {
+                            audioArtworkIsFallback = true
+                            binding.audioArtwork.imageTintList =
+                                ColorStateList.valueOf(themePalette.accentSurfaceColor)
                             binding.audioArtwork.setImageResource(R.drawable.ic_cast)
                         } else {
+                            audioArtworkIsFallback = false
+                            binding.audioArtwork.imageTintList = null
                             binding.audioArtwork.setImageBitmap(bitmap)
                         }
                     }
@@ -592,6 +668,16 @@ open class MainActivity : AppCompatActivity() {
             scheduleControlsIfNeeded(state)
         }
         lastState = state
+        applyMediaControlColors()
+        applyPlaybackTextColors()
+        if (themeRecreatePending && !isVisualPlayback(state) &&
+            !isChangingConfigurations &&
+            lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        ) {
+            themeRecreatePending = false
+            recreateForThemeChange()
+            return
+        }
 
         val active = state.phase in ACTIVE_PHASES
         val error = state.phase == CastPhase.RECOVERABLE_ERROR
@@ -601,7 +687,8 @@ open class MainActivity : AppCompatActivity() {
             settingsVisible = false
             binding.drivingGuardWarning.isVisible = false
         }
-        renderRootBackground()
+        renderRootBackground(state)
+        applySystemBarColors()
         binding.settingsContent.isVisible = settingsVisible
         binding.waitingContent.isVisible = waiting && !settingsVisible && !safetyVisible
         binding.errorContent.isVisible = error && !settingsVisible && !safetyVisible
@@ -847,14 +934,18 @@ open class MainActivity : AppCompatActivity() {
         if (selected) {
             container.setBackgroundResource(R.drawable.cast_settings_navigation_selected)
             container.backgroundTintList = ColorStateList.valueOf(
-                ContextCompat.getColor(this, R.color.cast_accent),
+                themePalette.accentColor,
             )
-            icon.imageTintList = ColorStateList.valueOf(Color.WHITE)
-            label.setTextColor(Color.WHITE)
+            icon.imageTintList = ColorStateList.valueOf(themePalette.accentTextColor)
+            label.setTextColor(themePalette.accentTextColor)
         } else {
             container.background = null
             container.backgroundTintList = null
-            icon.imageTintList = null
+            icon.imageTintList = if (icon.id == R.id.settings_navigation_receiver_icon) {
+                ColorStateList.valueOf(themePalette.accentSurfaceColor)
+            } else {
+                null
+            }
             label.setTextColor(ContextCompat.getColor(this, R.color.cast_text_primary))
         }
         container.isSelected = selected
@@ -924,15 +1015,242 @@ open class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun renderRootBackground() {
-        if (rootBackgroundShowsSettings == settingsVisible) return
-        rootBackgroundShowsSettings = settingsVisible
-        binding.root.background = if (settingsVisible) {
-            ContextCompat.getDrawable(this, android.R.color.transparent)
-        } else {
-            ContextCompat.getDrawable(this, R.drawable.cast_background)
+    private fun renderRootBackground(state: CastSessionState) {
+        val mode = when {
+            settingsVisible -> RootBackgroundMode.SETTINGS
+            isVisualPlayback(state) -> RootBackgroundMode.PLAYBACK_BLACK
+            else -> RootBackgroundMode.DEFAULT
+        }
+        if (rootBackgroundMode == mode) return
+        rootBackgroundMode = mode
+        binding.root.background = when (mode) {
+            RootBackgroundMode.SETTINGS -> ContextCompat.getDrawable(
+                this,
+                android.R.color.transparent,
+            )
+            RootBackgroundMode.PLAYBACK_BLACK -> android.graphics.drawable.ColorDrawable(Color.BLACK)
+            RootBackgroundMode.DEFAULT -> ContextCompat.getDrawable(this, R.drawable.cast_background)
         }
     }
+
+    private fun recreateForThemeChange() {
+        themeRecreatePending = false
+        castService
+            ?.takeIf { lastState.phase != CastPhase.STOPPED }
+            ?.let { service ->
+                service.retainAcrossActivityRecreation()
+                startService(Intent(this, CastService::class.java))
+                serviceRetainedForConfiguration = true
+            }
+        recreate()
+    }
+
+    private fun refreshThemePalette() {
+        if (!::binding.isInitialized || !::commercialWaitingRenderer.isInitialized) return
+        themePalette = IcarThemeColorPalette.resolve(
+            themeKey = runCatching {
+                Settings.Global.getInt(contentResolver, IcarThemeColorPalette.GLOBAL_THEME_KEY)
+            }.getOrNull(),
+            nightMode = isNightMode(),
+        )
+        applySystemBarColors()
+        applyMediaControlColors()
+        if (audioArtworkIsFallback) {
+            binding.audioArtwork.imageTintList =
+                ColorStateList.valueOf(themePalette.accentSurfaceColor)
+        }
+        binding.drivingGuardSwitch.updateThemeColors(
+            accentColor = themePalette.accentColor,
+            offTrackColor = ContextCompat.getColor(this, R.color.cast_settings_switch_track_off),
+            thumbColor = ContextCompat.getColor(this, R.color.cast_settings_switch_thumb),
+        )
+        commercialWaitingRenderer.updateAccent(
+            accentColor = themePalette.accentColor,
+            accentSurfaceColor = themePalette.accentSurfaceColor,
+        )
+        commercialRenderer?.updateAccent(
+            accentColor = themePalette.accentColor,
+            accentTextColor = themePalette.accentTextColor,
+            accentSurfaceColor = themePalette.accentSurfaceColor,
+        )
+        if (::binding.isInitialized) {
+            binding.startProgress.indeterminateTintList =
+                ColorStateList.valueOf(themePalette.accentSurfaceColor)
+            binding.settingsButton.setTextColor(themePalette.accentSurfaceColor)
+            binding.waitingIcon.imageTintList =
+                ColorStateList.valueOf(themePalette.accentSurfaceColor)
+            binding.retryButton.backgroundTintList = ColorStateList.valueOf(themePalette.accentColor)
+            binding.retryButton.setTextColor(themePalette.accentTextColor)
+            binding.drivingGuardKeepButton.backgroundTintList =
+                ColorStateList.valueOf(themePalette.accentColor)
+            binding.drivingGuardKeepButton.setTextColor(themePalette.accentTextColor)
+            applyPlaybackTextColors()
+            renderSettingsNavigation(
+                binding.settingsNavigationReceiver,
+                binding.settingsNavigationReceiverIcon,
+                binding.settingsNavigationReceiverLabel,
+                selectedSettingsSection == SettingsSection.RECEIVER,
+            )
+            renderSettingsNavigation(
+                binding.settingsNavigationSafety,
+                binding.settingsNavigationSafetyIcon,
+                binding.settingsNavigationSafetyLabel,
+                selectedSettingsSection == SettingsSection.SAFETY,
+            )
+            renderSettingsNavigation(
+                binding.settingsNavigationEntitlement,
+                binding.settingsNavigationEntitlementIcon,
+                binding.settingsNavigationEntitlementLabel,
+                selectedSettingsSection == SettingsSection.COMMERCIAL,
+            )
+            renderSettingsNavigation(
+                binding.settingsNavigationAbout,
+                binding.settingsNavigationAboutIcon,
+                binding.settingsNavigationAboutLabel,
+                selectedSettingsSection == SettingsSection.ABOUT,
+            )
+            renderWaitingTitle(lastState)
+            renderRootBackground(lastState)
+        }
+    }
+
+    /**
+     * uiMode is handled manually because recreating a visual SurfaceView would
+     * interrupt the Android 9 decoder. This also covers a change made while
+     * the Activity was stopped, where onConfigurationChanged may not be
+     * delivered to the current instance.
+     */
+    private fun synchronizeThemeConfiguration(
+        configuration: Configuration = resources.configuration,
+    ): Boolean {
+        val nextNightMode = isNightMode(configuration)
+        if (nextNightMode == renderedNightMode) return false
+        renderedNightMode = nextNightMode
+        val preserveVisualOutput = isVisualPlayback(lastState) && lastDrivingSafetyAlert == null
+        if (!preserveVisualOutput) {
+            recreateForThemeChange()
+            return true
+        }
+        themeRecreatePending = nextNightMode != inflatedNightMode
+        return false
+    }
+
+    private fun applyMediaControlColors() {
+        if (!::mediaProgressView.isInitialized) return
+        val visualPlayback = isVisualPlayback(lastState)
+        val controlForeground = if (visualPlayback) {
+            Color.WHITE
+        } else {
+            ContextCompat.getColor(this, R.color.cast_text_primary)
+        }
+        (mediaProgressView as? DefaultTimeBar)?.apply {
+            val progressAccent = if (visualPlayback) {
+                themePalette.accentColor
+            } else {
+                themePalette.accentSurfaceColor
+            }
+            setPlayedColor(progressAccent)
+            setScrubberColor(progressAccent)
+            setBufferedColor(
+                if (visualPlayback) 0x99FFFFFF.toInt()
+                else ContextCompat.getColor(this@MainActivity, R.color.cast_control_buffered_audio),
+            )
+            setUnplayedColor(
+                if (visualPlayback) 0x66FFFFFF
+                else ContextCompat.getColor(this@MainActivity, R.color.cast_control_unplayed_audio),
+            )
+        }
+        listOf(
+            binding.mediaControlView.findViewById<ImageView>(androidx.media3.ui.R.id.exo_play_pause),
+            binding.mediaControlView.findViewById<ImageView>(androidx.media3.ui.R.id.exo_fullscreen),
+        ).forEach { control ->
+            control?.let {
+                it.imageTintList = ColorStateList.valueOf(controlForeground)
+                val background = it.background?.mutate()
+                if (background is RippleDrawable) {
+                    background.setColor(ColorStateList.valueOf(
+                        if (visualPlayback) Color.WHITE else themePalette.accentSurfaceColor,
+                    ))
+                    it.background = background
+                }
+            }
+        }
+        listOf(
+            binding.mediaControlView.findViewById<android.widget.TextView>(androidx.media3.ui.R.id.exo_position),
+            binding.mediaControlView.findViewById<android.widget.TextView>(androidx.media3.ui.R.id.exo_duration),
+        ).forEach { time ->
+            time?.setTextColor(controlForeground)
+        }
+    }
+
+    private fun applyPlaybackTextColors() {
+        if (!::binding.isInitialized) return
+        val visualPlayback = isVisualPlayback(lastState)
+        val foreground = if (visualPlayback) {
+            Color.WHITE
+        } else {
+            ContextCompat.getColor(this, R.color.cast_text_primary)
+        }
+        val title = if (visualPlayback) {
+            ContextCompat.getColor(this, R.color.cast_control_title)
+        } else {
+            ContextCompat.getColor(this, R.color.cast_text_secondary)
+        }
+        binding.protocolLabel.setTextColor(foreground)
+        binding.mediaTitle.setTextColor(title)
+        binding.closeButton.imageTintList = ColorStateList.valueOf(foreground)
+        binding.waitingFullscreenExitButton.imageTintList = ColorStateList.valueOf(
+            ContextCompat.getColor(this, R.color.cast_text_primary),
+        )
+    }
+
+    private fun applySystemBarColors() {
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            var flags = window.decorView.systemUiVisibility
+            flags = flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+            val lightSystemBars = !isVisualPlayback(lastState) &&
+                lastDrivingSafetyAlert == null &&
+                !isNightMode()
+            if (lightSystemBars) {
+                flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                flags = flags and View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+                if (lightSystemBars) {
+                    flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                }
+            }
+            window.decorView.systemUiVisibility = flags
+        }
+    }
+
+    private fun registerThemeColorObserver() {
+        if (themeObserverRegistered) return
+        runCatching {
+            contentResolver.registerContentObserver(
+                Settings.Global.getUriFor(IcarThemeColorPalette.GLOBAL_THEME_KEY),
+                false,
+                themeColorObserver,
+            )
+            themeObserverRegistered = true
+        }
+    }
+
+    private fun unregisterThemeColorObserver() {
+        if (!themeObserverRegistered) return
+        runCatching { contentResolver.unregisterContentObserver(themeColorObserver) }
+        themeObserverRegistered = false
+    }
+
+    private fun isNightMode(configuration: Configuration = resources.configuration): Boolean =
+        configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+            Configuration.UI_MODE_NIGHT_YES
+
+    private fun isVisualPlayback(state: CastSessionState): Boolean =
+        state.phase in setOf(CastPhase.PLAYING, CastPhase.MIRRORING) &&
+            state.content in setOf(CastContentKind.NETWORK_VIDEO, CastContentKind.MIRROR, CastContentKind.IMAGE)
 
     private fun protocolName(protocol: CastProtocol?): String = when (protocol) {
         CastProtocol.AIRPLAY -> getString(R.string.cast_protocol_airplay)
@@ -944,6 +1262,9 @@ open class MainActivity : AppCompatActivity() {
         const val CONTROLS_TIMEOUT_MS = 3_000L
         const val AGREEMENT_QR_BITMAP_SIZE_PX = 512
         const val ABOUT_QR_BITMAP_SIZE_PX = 512
+        const val STATE_SETTINGS_VISIBLE = "settings_visible"
+        const val STATE_SETTINGS_SECTION = "settings_section"
+        const val STATE_SERVICE_RETAINED = "service_retained_for_configuration"
         val ACTIVE_PHASES = setOf(
             CastPhase.PLAYING,
             CastPhase.MIRRORING,

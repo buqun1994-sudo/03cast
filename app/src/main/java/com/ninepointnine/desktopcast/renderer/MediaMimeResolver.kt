@@ -6,6 +6,7 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
 /** Resolves only high-confidence media types; null keeps Media3's normal probing path. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal object MediaMimeResolver {
 
     fun resolve(location: String, declaredMimeType: String? = null): String? {
