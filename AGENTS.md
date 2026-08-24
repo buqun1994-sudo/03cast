@@ -54,6 +54,7 @@
 5. 新增业务专项 skill 前，先确认它不是一次性规则，也不是已有文档、脚本或测试能承接的机械动作。
 6. 参考其它项目 skill 时，只复制通用工作流骨架和可验证做法，必须去除其它项目专有约束、名称、路径、部署入口和业务能力。
 7. 模板级候选能力必须通过 `rule-discovery` 判断，再通过 `template-feedback` 回流本地模板源 `/Users/q/Documents/Projects/NewProject`；当前项目只承载项目事实和候选记录。
+8. 涉及本产品包名、namespace、版本、签名、许可证、远端仓库或发布产物时，必须先使用 `.agents/skills/03-app-repository/SKILL.md` 路由到共享 `03-app-manager`；不得在本仓库维护第二份 03 APP 身份表。
 
 ## 7. 验证分级
 
