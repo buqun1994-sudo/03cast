@@ -1,5 +1,13 @@
 # 项目进度
 
+## 2026-09-02 staging 与 production 包重新构建并覆盖（完成）
+
+1. 已从已推送提交 `b91ca7c` 重新构建 staging Debug（`0.1.0` / versionCode `1`）和 production Release（`1.0.1-icar03` / versionCode `2`）；Release 的 R8、资源收缩和签名任务均成功。
+2. staging APK 已核对为 `com.ninepointnine.desktopcast`、单 signer、APK Signature Scheme v2，证书摘要为登记的 `98740b95c30064f727b9401a851ecf2e576d5e5c38fcc318284578747ba50e2a`；文件大小 `27101947` 字节，SHA-256 为 `d0acc7c04d1394a5f5d7a8e5d5e35cd07e88790460c27082185c05e7b3a10841`。
+3. production APK 已核对为 `com.ninepointnine.desktopcast`、`1.0.1-icar03` / versionCode `2`、`debuggable=false`、单 signer、APK Signature Scheme v2，证书摘要为登记的 `14e4a7cdf1481afdb871487aa830bb0dc28910c0ba681693f11f9f1dd2fd4423`；文件大小 `11664485` 字节，SHA-256 为 `317663da2cd368bbec2024e893706de51db668164aa9af426c124774cba8259b`。
+4. 两个 APK 均已重新生成单 APK ZIP，并覆盖桌面旧文件：staging ZIP `03投屏-staging-v0.1.0-icar03.zip` 大小 `10200471` 字节、SHA-256 为 `e696ef7dcc98552e8185498a2b9569587b8adee6efa2bbd2e30526419ed5d7c5`；production ZIP `03投屏-v1.0.1-icar03.zip` 大小 `4805449` 字节、SHA-256 为 `ada10cf6cbcb2c5888abcf8a7ec065fd9ba0f9096aefa8bb0fc38f294eecdaa0`。两个 ZIP 均只有一个 UTF-8 同名 APK 条目，解压回读与外部 APK 字节一致。
+5. 本轮已完成客户端提交并推送 `origin/main`；未安装 APK、未部署测试环境、未上线 production，也未修改 Cloud 登记库或发布配置。
+
 ## 2026-09-02 03cast 永久 PRO 与生命周期在线复核移植
 
 1. 已完成：将 03 歌词已验收的设备商业生命周期主链移植到 `03cast`，产品身份保持 `03cast / 03cast_pro_device_cny / com.ninepointnine.desktopcast / icar03`，未修改 03 歌词或 cloud。
