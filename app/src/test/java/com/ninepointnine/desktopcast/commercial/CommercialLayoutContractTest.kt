@@ -151,6 +151,25 @@ class CommercialLayoutContractTest {
     }
 
     @Test
+    fun commercialVariantHasNoDiagnosticDumpHook() {
+        val appDirectory = findAppDirectory()
+        val debugVariant = File(
+            appDirectory,
+            "src/debug/java/com/ninepointnine/desktopcast/commercial/CommercialVariantUi.kt",
+        ).readText()
+        val releaseVariant = File(
+            appDirectory,
+            "src/release/java/com/ninepointnine/desktopcast/commercial/CommercialVariantUi.kt",
+        ).readText()
+
+        listOf(debugVariant, releaseVariant).forEach { source ->
+            assertFalse(source.contains("handleDiagnosticResume"))
+            assertFalse(source.contains("commercial_debug_dump"))
+            assertFalse(source.contains("commercial_diagnostic.txt"))
+        }
+    }
+
+    @Test
     fun runtimeBoundaryKeepsReceiverAliveWhenCommercialAccessIsDenied() {
         val router = File(
             findAppDirectory(),

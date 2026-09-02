@@ -46,13 +46,13 @@ sealed interface CommercialAccessDecision {
         val expiresAtEpochMs: Long?,
         /** Signed trial boundary, when the tier is TRIAL. */
         val trialEndsAtEpochMs: Long? = null,
-        /** Raw signed boundary retained for diagnostics; null for permanent PRO. */
+        /** Raw signed boundary used for local access projection; null for permanent PRO. */
         val offlineGraceUntilEpochMs: Long? = null
     ) : CommercialAccessDecision
 
     data class Denied(
         val reason: CommercialAccessDenial,
-        /** Retained only for a locally verified expired license diagnostic. */
+        /** Retained to project a locally verified expired signed license. */
         val trialEndsAtEpochMs: Long? = null,
         val expiresAtEpochMs: Long? = null,
         val offlineGraceUntilEpochMs: Long? = null

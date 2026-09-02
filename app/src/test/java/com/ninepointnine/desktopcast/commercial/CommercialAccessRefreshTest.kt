@@ -98,10 +98,6 @@ class CommercialAccessRefreshTest {
             val ready = result as EntitlementQueryResult.Ready
             assertEquals(EntitlementState.Trial(trialEndsAt, 10_000L), ready.snapshot.entitlement)
             assertEquals(ready.snapshot, snapshots.single())
-            val diagnostic = coordinator.diagnostic()
-            assertEquals(CommercialTier.TRIAL, diagnostic.tier)
-            assertEquals(trialEndsAt, diagnostic.trialEndsAtEpochMs)
-            assertEquals(10_000L, diagnostic.remainingMillis)
         }
 
     @Test

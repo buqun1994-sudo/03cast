@@ -7,9 +7,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.drawable.Drawable
-import android.util.Log
 import android.widget.ImageView
-import java.time.Instant
 
 object CommercialVariantUi {
     fun handleDebugIntent(
@@ -18,7 +16,6 @@ object CommercialVariantUi {
         controller: CommercialController
     ) {
         val runtime = CommercialRuntimeFactory.debugRuntime(context)
-        dumpDiagnosticIfRequested(context, intent, runtime)
         intent.getStringExtra(EXTRA_ENTITLEMENT_SCENARIO)?.let { value ->
             val scenario = when (value.lowercase()) {
                 "trial" -> DebugEntitlementScenario.TRIAL
@@ -52,38 +49,6 @@ object CommercialVariantUi {
         }
     }
 
-    fun handleDiagnosticResume(context: Context, intent: Intent) {
-        if (!intent.getBooleanExtra(EXTRA_DIAGNOSTIC, false)) return
-        dumpDiagnosticIfRequested(context, intent, CommercialRuntimeFactory.debugRuntime(context))
-    }
-
-    private fun dumpDiagnosticIfRequested(
-        context: Context,
-        intent: Intent,
-        runtime: DebugCommercialRuntime
-    ) {
-        if (!intent.getBooleanExtra(EXTRA_DIAGNOSTIC, false)) return
-        val diagnostic = runtime.components.entitlementCoordinator.diagnostic()
-        val text = buildString {
-            appendLine("observedAt=${Instant.ofEpochMilli(diagnostic.observedAtEpochMs)}")
-            appendLine("decision=${diagnostic.decision}")
-            appendLine("tier=${diagnostic.tier}")
-            appendLine("trialEndsAt=${diagnostic.trialEndsAtEpochMs?.let(Instant::ofEpochMilli)}")
-            appendLine("remainingMillis=${diagnostic.remainingMillis}")
-            appendLine(
-                "offlineGraceUntil=" +
-                    diagnostic.offlineGraceUntilEpochMs?.let(Instant::ofEpochMilli)
-            )
-        }
-        runCatching {
-            context.openFileOutput(DIAGNOSTIC_FILE, Context.MODE_PRIVATE).use { output ->
-                output.write(text.toByteArray(Charsets.UTF_8))
-            }
-        }
-        Log.e("03cast-commercial", "local entitlement diagnostic\n$text")
-        intent.removeExtra(EXTRA_DIAGNOSTIC)
-    }
-
     fun renderPaymentQr(
         image: ImageView,
         session: PaymentSession,
@@ -100,8 +65,6 @@ object CommercialVariantUi {
     private const val EXTRA_ENTITLEMENT_SCENARIO = "commercial_debug_entitlement"
     private const val EXTRA_RECOVERY_SCENARIO = "commercial_debug_recovery"
     private const val EXTRA_PAYMENT_OUTCOME = "commercial_debug_payment"
-    private const val EXTRA_DIAGNOSTIC = "commercial_debug_dump"
-    private const val DIAGNOSTIC_FILE = "commercial_diagnostic.txt"
     private const val FIXTURE_QR_PREFIX = "https://fixture.03cast.invalid/"
 }
 

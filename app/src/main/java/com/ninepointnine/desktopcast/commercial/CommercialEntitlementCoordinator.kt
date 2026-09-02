@@ -175,28 +175,6 @@ class CommercialEntitlementCoordinator(
         return recheckEntitlement(nowEpochMs)
     }
 
-    fun diagnostic(nowEpochMs: Long = this.nowEpochMs()): CommercialEntitlementDiagnostic {
-        val decision = evaluate(nowEpochMs)
-        val trialEndsAt = when (decision) {
-            is CommercialAccessDecision.Allowed -> decision.trialEndsAtEpochMs
-            is CommercialAccessDecision.Denied -> decision.trialEndsAtEpochMs
-        }
-        val tier = (decision as? CommercialAccessDecision.Allowed)?.tier
-            ?: trialEndsAt?.let { CommercialTier.TRIAL }
-        val remaining = trialEndsAt?.let { it - nowEpochMs }
-        return CommercialEntitlementDiagnostic(
-            observedAtEpochMs = nowEpochMs,
-            decision = decision,
-            tier = tier,
-            trialEndsAtEpochMs = trialEndsAt,
-            remainingMillis = remaining,
-            offlineGraceUntilEpochMs = when (decision) {
-                is CommercialAccessDecision.Allowed -> decision.offlineGraceUntilEpochMs
-                is CommercialAccessDecision.Denied -> decision.offlineGraceUntilEpochMs
-            }
-        )
-    }
-
     private fun publishAccess(
         access: CommercialAccessDecision,
         nowEpochMs: Long
@@ -403,13 +381,4 @@ internal object CommercialAccessReconciliationPolicy {
 internal data class CommercialEntitlementCheckResult(
     val result: CommercialAccessRefreshResult,
     val access: CommercialAccessDecision
-)
-
-data class CommercialEntitlementDiagnostic(
-    val observedAtEpochMs: Long,
-    val decision: CommercialAccessDecision,
-    val tier: CommercialTier?,
-    val trialEndsAtEpochMs: Long?,
-    val remainingMillis: Long?,
-    val offlineGraceUntilEpochMs: Long?
 )

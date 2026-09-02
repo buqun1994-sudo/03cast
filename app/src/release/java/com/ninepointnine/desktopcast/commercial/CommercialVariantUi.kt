@@ -12,9 +12,6 @@ object CommercialVariantUi {
         controller: CommercialController
     ) = Unit
 
-    @Suppress("UNUSED_PARAMETER")
-    fun handleDiagnosticResume(context: Context, intent: Intent) = Unit
-
     fun renderPaymentQr(
         image: ImageView,
         session: PaymentSession,
