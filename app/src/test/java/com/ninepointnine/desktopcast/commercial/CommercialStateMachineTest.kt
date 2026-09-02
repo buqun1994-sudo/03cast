@@ -150,6 +150,112 @@ class CommercialStateMachineTest {
     }
 
     @Test
+    fun revokedQueryFixesTheEntitlementPageOwner() {
+        val machine = CommercialStateMachine(
+            CommercialUiState(
+                entitlement = EntitlementState.Pro,
+                quote = quote,
+                checkout = CheckoutState.AwaitingPayment(paymentSession()),
+                navigationIntent = CommercialNavigationIntent.QR,
+            )
+        )
+
+        val state = machine.dispatch(
+            CommercialAction.QueryFailed(CommercialFailure.ENTITLEMENT_REVOKED),
+        )
+
+        assertEquals(
+            EntitlementState.Error(CommercialFailure.ENTITLEMENT_REVOKED),
+            state.entitlement,
+        )
+        assertEquals(CheckoutState.Hidden, state.checkout)
+        assertEquals(
+            CommercialNavigationIntent.ENTITLEMENT,
+            state.navigationIntent,
+        )
+    }
+
+    @Test
+    fun revokedEntitlementCanOpenCheckoutAfterQuoteIsLoaded() {
+        val machine = CommercialStateMachine(
+            CommercialUiState(
+                entitlement = EntitlementState.Error(CommercialFailure.ENTITLEMENT_REVOKED),
+                quote = quote,
+                navigationIntent = CommercialNavigationIntent.ENTITLEMENT,
+            )
+        )
+
+        val state = machine.dispatch(CommercialAction.CheckoutRequested)
+
+        assertEquals(CheckoutState.Details, state.checkout)
+        assertEquals(CommercialPage.ORDER, CommercialPagePolicy.pageFor(state.checkout))
+        assertEquals(CommercialNavigationIntent.ORDER, state.navigationIntent)
+    }
+
+    @Test
+    fun initialQuoteFailureReturnsToRevokedEntitlementPageForRetry() {
+        val machine = CommercialStateMachine(
+            CommercialUiState(
+                entitlement = EntitlementState.Error(CommercialFailure.ENTITLEMENT_REVOKED),
+                navigationIntent = CommercialNavigationIntent.ENTITLEMENT,
+            )
+        )
+
+        machine.dispatch(CommercialAction.QuoteStarted)
+        val state = machine.dispatch(CommercialAction.QuoteFailed(CommercialFailure.NETWORK))
+
+        assertEquals(CheckoutState.Hidden, state.checkout)
+        assertEquals(CommercialNavigationIntent.ENTITLEMENT, state.navigationIntent)
+        assertFalse(state.quoteRefreshing)
+    }
+
+    @Test
+    fun lateQuoteCompletionCannotReopenOrderAfterUserReturnsToEntitlement() {
+        val machine = CommercialStateMachine(
+            CommercialUiState(
+                entitlement = EntitlementState.Error(CommercialFailure.ENTITLEMENT_REVOKED),
+                navigationIntent = CommercialNavigationIntent.ENTITLEMENT,
+            )
+        )
+
+        machine.dispatch(CommercialAction.QuoteStarted)
+        machine.dispatch(CommercialAction.EntitlementPageRequested)
+
+        val state = machine.dispatch(CommercialAction.QuoteCompleted(quote))
+
+        assertEquals(quote, state.quote)
+        assertEquals(CheckoutState.Hidden, state.checkout)
+        assertEquals(
+            CommercialNavigationIntent.ENTITLEMENT,
+            state.navigationIntent,
+        )
+    }
+
+    @Test
+    fun latePaymentCreationCannotReopenQrAfterUserReturnsToEntitlement() {
+        val session = paymentSession()
+        val machine = CommercialStateMachine(
+            CommercialUiState(
+                entitlement = EntitlementState.Trial(40_000L, 20_000L),
+                quote = quote,
+                checkout = CheckoutState.Details,
+                navigationIntent = CommercialNavigationIntent.ORDER,
+            )
+        )
+
+        machine.dispatch(CommercialAction.PaymentCreationStarted)
+        machine.dispatch(CommercialAction.EntitlementPageRequested)
+
+        val state = machine.dispatch(CommercialAction.PaymentCreated(session))
+
+        assertEquals(CheckoutState.Hidden, state.checkout)
+        assertEquals(
+            CommercialNavigationIntent.ENTITLEMENT,
+            state.navigationIntent,
+        )
+    }
+
+    @Test
     fun latePendingSnapshotCannotReopenQrAfterUserReturnsToEntitlement() {
         val machine = CommercialStateMachine(
             CommercialUiState(
@@ -370,6 +476,27 @@ class CommercialStateMachineTest {
     }
 
     @Test
+    fun revokedPaymentFailureAlwaysReturnsToEntitlementPage() {
+        val state = CommercialStateMachine(
+            CommercialUiState(
+                entitlement = EntitlementState.Pro,
+                checkout = CheckoutState.AwaitingPayment(paymentSession()),
+                navigationIntent = CommercialNavigationIntent.QR,
+            )
+        ).dispatch(CommercialAction.PaymentRefreshFailed(CommercialFailure.ENTITLEMENT_REVOKED))
+
+        assertEquals(
+            EntitlementState.Error(CommercialFailure.ENTITLEMENT_REVOKED),
+            state.entitlement,
+        )
+        assertEquals(CheckoutState.Hidden, state.checkout)
+        assertEquals(
+            CommercialNavigationIntent.ENTITLEMENT,
+            state.navigationIntent,
+        )
+    }
+
+    @Test
     fun latePaymentPollFailureCannotNavigateAfterQrBack() {
         val machine = CommercialStateMachine(
             CommercialUiState(
@@ -379,6 +506,13 @@ class CommercialStateMachineTest {
         )
         machine.dispatch(CommercialAction.PaymentCreated(paymentSession()))
         machine.dispatch(CommercialAction.EntitlementPageRequested)
+
+        val afterPending = machine.dispatch(CommercialAction.PaymentPending)
+        assertEquals(CheckoutState.Hidden, afterPending.checkout)
+        assertEquals(
+            CommercialNavigationIntent.ENTITLEMENT,
+            afterPending.navigationIntent
+        )
 
         val afterNetworkFailure = machine.dispatch(
             CommercialAction.PaymentRefreshFailed(CommercialFailure.NETWORK)

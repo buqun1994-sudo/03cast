@@ -118,7 +118,8 @@
     <string name="commercial_restore_not_found">未找到可恢复的购买</string>
     <string name="commercial_restore_network_error">网络异常，暂时无法恢复购买</string>
     <string name="commercial_restore_device_mismatch">当前设备与原购买设备不一致，无法恢复</string>
-    <string name="commercial_entitlement_revoked">权益已撤销，当前无法继续使用</string>
+    <string name="commercial_entitlement_revoked">权益已撤销，需重新获取Pro</string>
+    <string name="commercial_reacquire_pro">获取Pro</string>
     <string name="commercial_accessibility_status">当前权益：%1$s</string>
     <string name="commercial_accessibility_ad">查看权益，%1$s</string>
     <string name="accessibility_about_terms_qr">用户协议二维码</string>
@@ -129,9 +130,11 @@
     <string name="cast_commercial_waiting_checking">正在确认投屏权益</string>
     <string name="cast_commercial_waiting_expired_detail">试用已到期，请购买Pro以继续</string>
     <string name="cast_commercial_waiting_error_detail">请重新确认权益，或打开权益中心查看购买状态</string>
+    <string name="cast_commercial_waiting_revoked">权益已撤销</string>
+    <string name="cast_commercial_waiting_revoked_detail">请重新获取Pro以继续</string>
     <string name="cast_commercial_purchase_ad_prefix">现在购买Pro，仅需</string>
     <string name="cast_commercial_purchase_ad_fallback">现在购买Pro</string>
-    <string name="cast_commercial_buy_pro">购买 Pro</string>
+    <string name="cast_commercial_buy_pro">获取Pro</string>
     <string name="cast_commercial_view_entitlement">查看权益</string>
     <string name="cast_commercial_retry">重新确认</string>
 </resources>

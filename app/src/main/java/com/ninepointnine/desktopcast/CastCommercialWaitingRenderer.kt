@@ -14,6 +14,7 @@ import android.view.View
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
+import com.ninepointnine.desktopcast.commercial.CommercialFailure
 import com.ninepointnine.desktopcast.commercial.CommercialUiState
 import com.ninepointnine.desktopcast.commercial.EntitlementState
 import com.ninepointnine.desktopcast.commercial.ProductQuote
@@ -72,6 +73,7 @@ class CastCommercialWaitingRenderer(
         buyPro.isVisible = false
         viewEntitlement.isVisible = false
         retry.isVisible = false
+        buyPro.setText(R.string.cast_commercial_buy_pro)
         detail.isVisible = false
         purchaseDetail.isVisible = false
         status.isVisible = true
@@ -109,11 +111,18 @@ class CastCommercialWaitingRenderer(
                 purchaseAd.isVisible = true
             }
             is EntitlementState.Error -> {
-                status.setText(R.string.cast_commercial_waiting_error)
-                detail.setText(R.string.cast_commercial_waiting_error_detail)
-                detail.isVisible = true
-                retry.isVisible = true
-                viewEntitlement.isVisible = true
+                if (entitlement.reason == CommercialFailure.ENTITLEMENT_REVOKED) {
+                    status.setText(R.string.cast_commercial_waiting_revoked)
+                    detail.setText(R.string.cast_commercial_waiting_revoked_detail)
+                    detail.isVisible = true
+                    buyPro.isVisible = true
+                } else {
+                    status.setText(R.string.cast_commercial_waiting_error)
+                    detail.setText(R.string.cast_commercial_waiting_error_detail)
+                    detail.isVisible = true
+                    retry.isVisible = true
+                    viewEntitlement.isVisible = true
+                }
                 status.setTextColor(ContextCompat.getColor(context, R.color.cast_error))
             }
         }

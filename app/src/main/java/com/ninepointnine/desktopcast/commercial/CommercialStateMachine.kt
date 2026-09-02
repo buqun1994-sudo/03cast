@@ -88,7 +88,17 @@ class CommercialStateMachine(initialState: CommercialUiState = CommercialUiState
         }
 
         is CommercialAction.QueryFailed -> {
-            if (action.reason in TRANSIENT_QUERY_FAILURES &&
+            if (action.reason == CommercialFailure.ENTITLEMENT_REVOKED) {
+                current.copy(
+                    entitlement = EntitlementState.Error(action.reason),
+                    quote = null,
+                    checkout = CheckoutState.Hidden,
+                    queryRefreshing = false,
+                    quoteRefreshing = false,
+                    quoteNotice = null,
+                    navigationIntent = CommercialNavigationIntent.ENTITLEMENT
+                )
+            } else if (action.reason in TRANSIENT_QUERY_FAILURES &&
                 current.navigationIntent != null
             ) {
                 // A transient lifecycle failure does not invalidate the
@@ -111,6 +121,7 @@ class CommercialStateMachine(initialState: CommercialUiState = CommercialUiState
         CommercialAction.EntitlementPageRequested -> current.copy(
             checkout = CheckoutState.Hidden,
             selectedPaymentMethod = current.quote.defaultPaymentMethod(),
+            quoteRefreshing = false,
             navigationIntent = CommercialNavigationIntent.ENTITLEMENT
         )
 
@@ -135,22 +146,51 @@ class CommercialStateMachine(initialState: CommercialUiState = CommercialUiState
             navigationIntent = CommercialNavigationIntent.ORDER
         )
 
-        is CommercialAction.QuoteCompleted -> current.copy(
-            quote = action.quote,
-            discountCode = action.quote.discountCode ?: current.discountCode,
-            selectedPaymentMethod = action.quote.defaultPaymentMethod(),
-            checkout = CheckoutState.Details,
-            quoteRefreshing = false,
-            quoteNotice = action.notice,
-            navigationIntent = CommercialNavigationIntent.ORDER
-        )
+        is CommercialAction.QuoteCompleted -> {
+            val ownsOrder = current.ownsOrderOperation()
+            current.copy(
+                quote = action.quote,
+                discountCode = action.quote.discountCode ?: current.discountCode,
+                selectedPaymentMethod = action.quote.defaultPaymentMethod(),
+                // A quote request may finish after the user has returned to
+                // the entitlement page. Keep the data, but never reclaim the
+                // page from that explicit navigation.
+                checkout = if (ownsOrder) CheckoutState.Details else current.checkout,
+                quoteRefreshing = false,
+                quoteNotice = if (ownsOrder) action.notice else null,
+                navigationIntent = if (ownsOrder) {
+                    CommercialNavigationIntent.ORDER
+                } else {
+                    current.navigationIntent
+                }
+            )
+        }
 
-        is CommercialAction.QuoteFailed -> current.copy(
-            checkout = CheckoutState.Error(action.reason),
-            quoteRefreshing = false,
-            quoteNotice = null,
-            navigationIntent = CommercialNavigationIntent.ORDER
-        )
+        is CommercialAction.QuoteFailed -> {
+            if (current.quote == null && current.ownsOrderOperation()) {
+                // A first quote is the prerequisite for the order page. Keep
+                // the user on the entitlement page when it fails so a
+                // revoked device can retry instead of landing on an empty,
+                // non-actionable order shell.
+                current.copy(
+                    checkout = CheckoutState.Hidden,
+                    quoteRefreshing = false,
+                    quoteNotice = null,
+                    navigationIntent = CommercialNavigationIntent.ENTITLEMENT
+                )
+            } else if (current.ownsOrderOperation()) {
+                current.copy(
+                    checkout = CheckoutState.Error(action.reason),
+                    quoteRefreshing = false,
+                    quoteNotice = null,
+                    navigationIntent = CommercialNavigationIntent.ORDER
+                )
+            } else {
+                // The request no longer owns the visible page. Clear its
+                // loading bit without changing the user's navigation.
+                current.copy(quoteRefreshing = false, quoteNotice = null)
+            }
+        }
 
         is CommercialAction.PaymentMethodChanged -> {
             if (action.method in current.quote?.availablePaymentMethods.orEmpty()) {
@@ -166,13 +206,23 @@ class CommercialStateMachine(initialState: CommercialUiState = CommercialUiState
             navigationIntent = CommercialNavigationIntent.ORDER
         )
 
-        is CommercialAction.PaymentCreated -> current.copy(
-            // The QR page is now owned by this payment operation. A late
-            // lifecycle snapshot must not replace it with order details or
-            // hide it merely because that snapshot was read earlier.
-            checkout = CheckoutState.AwaitingPayment(action.session),
-            navigationIntent = CommercialNavigationIntent.QR
-        )
+        is CommercialAction.PaymentCreated -> {
+            if (!current.ownsOrderOperation()) {
+                // The server-side purchase may still be pending, but the
+                // user has already left the order page. Keep the session in
+                // secure storage for a later lifecycle instead of reopening
+                // QR unexpectedly.
+                current
+            } else {
+                // The QR page is now owned by this payment operation. A late
+                // lifecycle snapshot must not replace it with order details
+                // or hide it merely because that snapshot was read earlier.
+                current.copy(
+                    checkout = CheckoutState.AwaitingPayment(action.session),
+                    navigationIntent = CommercialNavigationIntent.QR
+                )
+            }
+        }
 
         is CommercialAction.PaymentAlreadyOwned -> current.copy(
             entitlement = EntitlementState.Pro,
@@ -182,24 +232,37 @@ class CommercialStateMachine(initialState: CommercialUiState = CommercialUiState
             navigationIntent = CommercialNavigationIntent.ENTITLEMENT
         )
 
-        is CommercialAction.PaymentQuoteChanged -> current.copy(
-            quote = action.latestQuote,
-            discountCode = action.latestQuote.discountCode ?: current.discountCode,
-            selectedPaymentMethod = action.latestQuote.defaultPaymentMethod(),
-            checkout = CheckoutState.Details,
-            quoteNotice = QuoteNotice.PRICE_CHANGED,
-            navigationIntent = CommercialNavigationIntent.ORDER
-        )
+        is CommercialAction.PaymentQuoteChanged -> {
+            val ownsOrder = current.ownsOrderOperation()
+            current.copy(
+                quote = action.latestQuote,
+                discountCode = action.latestQuote.discountCode ?: current.discountCode,
+                selectedPaymentMethod = action.latestQuote.defaultPaymentMethod(),
+                checkout = if (ownsOrder) CheckoutState.Details else current.checkout,
+                quoteNotice = if (ownsOrder) QuoteNotice.PRICE_CHANGED else null,
+                navigationIntent = current.navigationIntent
+            )
+        }
 
-        is CommercialAction.PaymentCreationFailed -> current.copy(
-            checkout = CheckoutState.Error(action.reason),
-            quoteNotice = null,
-            navigationIntent = CommercialNavigationIntent.ORDER
-        )
+        is CommercialAction.PaymentCreationFailed -> {
+            if (current.ownsOrderOperation()) {
+                current.copy(
+                    checkout = CheckoutState.Error(action.reason),
+                    quoteNotice = null,
+                    navigationIntent = CommercialNavigationIntent.ORDER
+                )
+            } else {
+                current
+            }
+        }
 
         CommercialAction.PaymentPending -> {
             val awaiting = current.checkout as? CheckoutState.AwaitingPayment
-            if (awaiting == null) current
+            if (awaiting == null || !current.ownsQrOperation()) {
+                // Poll responses are asynchronous. Once the user has left QR,
+                // a late pending response must never reclaim page ownership.
+                current
+            }
             else current.copy(
                 checkout = awaiting.copy(transientFailure = null),
                 navigationIntent = CommercialNavigationIntent.QR
@@ -222,7 +285,7 @@ class CommercialStateMachine(initialState: CommercialUiState = CommercialUiState
         }
 
         CommercialAction.PaymentExpired -> {
-            if (current.checkout is CheckoutState.AwaitingPayment) {
+            if (current.checkout is CheckoutState.AwaitingPayment && current.ownsQrOperation()) {
                 current.copy(
                     checkout = CheckoutState.Expired,
                     navigationIntent = CommercialNavigationIntent.ORDER
@@ -236,22 +299,23 @@ class CommercialStateMachine(initialState: CommercialUiState = CommercialUiState
 
         is CommercialAction.PaymentRefreshFailed -> {
             val awaiting = current.checkout as? CheckoutState.AwaitingPayment
-            if (awaiting == null && action.reason != CommercialFailure.ENTITLEMENT_REVOKED) {
-                // Ignore a late network / expiry error for a QR session that
-                // is no longer the visible page.
-                current
-            } else if (awaiting != null && action.reason in TRANSIENT_POLL_FAILURES) {
-                current.copy(
-                    checkout = awaiting.copy(transientFailure = action.reason),
-                    navigationIntent = CommercialNavigationIntent.QR
-                )
-            } else if (awaiting == null) {
-                // Revocation is authoritative even when the QR page is no
-                // longer visible; project it onto the entitlement page.
+            if (action.reason == CommercialFailure.ENTITLEMENT_REVOKED) {
                 current.copy(
                     entitlement = EntitlementState.Error(action.reason),
                     checkout = CheckoutState.Hidden,
+                    quote = null,
+                    quoteRefreshing = false,
+                    quoteNotice = null,
                     navigationIntent = CommercialNavigationIntent.ENTITLEMENT
+                )
+            } else if (awaiting == null || !current.ownsQrOperation()) {
+                // Ignore a late network / expiry error for a QR session that
+                // is no longer the visible page.
+                current
+            } else if (action.reason in TRANSIENT_POLL_FAILURES) {
+                current.copy(
+                    checkout = awaiting.copy(transientFailure = action.reason),
+                    navigationIntent = CommercialNavigationIntent.QR
                 )
             } else {
                 current.copy(
@@ -326,6 +390,14 @@ class CommercialStateMachine(initialState: CommercialUiState = CommercialUiState
         PaymentMethod.WECHAT in availablePaymentMethods -> PaymentMethod.WECHAT
         else -> availablePaymentMethods.firstOrNull() ?: PaymentMethod.WECHAT
     }
+
+    private fun CommercialUiState.ownsOrderOperation(): Boolean =
+        navigationIntent == CommercialNavigationIntent.ORDER ||
+            (navigationIntent == null && CommercialPagePolicy.pageFor(checkout) == CommercialPage.ORDER)
+
+    private fun CommercialUiState.ownsQrOperation(): Boolean =
+        navigationIntent == CommercialNavigationIntent.QR ||
+            (navigationIntent == null && checkout is CheckoutState.AwaitingPayment)
 
     private companion object {
         val TRANSIENT_QUERY_FAILURES = setOf(

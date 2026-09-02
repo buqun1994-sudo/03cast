@@ -1,5 +1,14 @@
 # 项目进度
 
+## 2026-09-02 真实 Staging 退款 / 试用到期链路复核（已完成）
+
+1. 已纠正验证基线：此前安装的 Debug fixture 不能代表测试环境；本轮先卸载该 fixture，再安装真实 Staging Debug（`https://api-staging.9studio.fun`、`com.ninepointnine.desktopcast`、Staging 证书摘要 `98740b95c30064f727b9401a851ecf2e576d5e5c38fcc318284578747ba50e2a`）。
+2. 车机 `S56_HQX / Android 9 / 1920x1080` 已命中测试环境中已有的退款撤权与试用到期记录，未重新发放试用；等待投屏页显示“权益已撤销 / 请重新获取Pro以继续”，只保留“获取Pro”入口。
+3. 权益中心显示“权益已撤销，需重新获取Pro”；点击后重新取得 Staging 服务端报价（`¥0.02`）并进入订单详情，创建订单后二维码正常显示。使用 Android 返回键回到权益中心后，`1 s` 与 `6 s` 均未被晚到查询或支付轮询重新带回二维码页。
+4. 复核期间 `CastService` 和 `7000 / 8200 / 1900` 监听保持，说明撤权只释放媒体输出，不关闭接收运行时。
+5. 已重新生成并覆盖桌面测试 / 正式目录产物：Staging APK `27103199` 字节、SHA-256 `66d2aa54b1fc93f8e8c3ff89d7f6dc03a65020648b9306dcbe46db21b777e88e`；Staging ZIP `10161686` 字节、SHA-256 `45f1e8179ef21b34517e40b68f6faa0586417e3198df55ce7087ca726b3b65f7`；Production APK `11665741` 字节、SHA-256 `64d26f4c0b13dfa6babcdbf1577a4ff2367b19f033a859b67d3b53d905e11762`；Production ZIP `4789008` 字节、SHA-256 `86c15473dbf039a7894183f7a5d86d8587b35b4b57bdeccd2e27da624648229b`。两个 ZIP 均只有一个同名 APK、设置 UTF-8 文件名标志，且解压字节与 APK 完全一致；APK 包名、版本、单 signer、APK v2 和环境 API 地址均已核对。
+6. 已验证：全量 Debug JVM 单测通过、Staging `assembleDebug`、Production `assembleRelease`、项目就绪检查、skills 检查、安装脚本语法和 `git diff --check` 通过。模板快检因当前仓库是已初始化具体项目而不适用；03 APP 登记库直检仍被共享登记中旧的 production 版本 / HEAD / clean 快照阻断，未修改 Cloud 登记库。
+
 ## 2026-09-02 03cast 商业页面导航与生命周期复核解耦（已完成）
 
 1. 已定位：`MainActivity.openSettings()` 把同一 Activity 内的设置分区切换误当成权益生命周期，进入订单页和二维码返回都会启动新的查询；查询完成后状态机又无条件按待支付快照重建页面，导致订单页回权益首页、二维码返回后重入二维码。

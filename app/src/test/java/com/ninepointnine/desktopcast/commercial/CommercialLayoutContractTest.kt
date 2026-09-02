@@ -50,6 +50,8 @@ class CommercialLayoutContractTest {
         assertTrue(strings.contains("cast_commercial_waiting_unavailable"))
         assertTrue(strings.contains("cast_commercial_waiting_expired_detail"))
         assertTrue(strings.contains("cast_commercial_waiting_pro"))
+        assertTrue(strings.contains("cast_commercial_waiting_revoked"))
+        assertTrue(strings.contains("commercial_reacquire_pro"))
         assertTrue(strings.contains("cast_commercial_purchase_ad_prefix"))
         assertTrue(strings.contains("settings_navigation_about"))
     }
@@ -121,8 +123,31 @@ class CommercialLayoutContractTest {
         assertTrue(renderer.contains("commercial_ad_original_price"))
         assertTrue(renderer.contains("ReplacementSpan"))
         assertTrue(renderer.contains("getTextBounds(\"权\""))
+        assertTrue(renderer.contains("CommercialFailure.ENTITLEMENT_REVOKED"))
+        assertTrue(renderer.contains("cast_commercial_waiting_revoked"))
+        assertTrue(renderer.contains("buyPro.isVisible = true"))
         assertTrue(mainActivity.contains("onBuyPro = ::openCommercialEntitlement"))
         assertTrue(mainActivity.contains("cast_commercial_waiting_unavailable"))
+    }
+
+    @Test
+    fun revokedCommercialStateKeepsPurchaseActionAndQuoteRecovery() {
+        val appDirectory = findAppDirectory()
+        val strings = File(appDirectory, "src/main/res/values/strings.xml").readText()
+        val settings = File(
+            appDirectory,
+            "src/main/java/com/ninepointnine/desktopcast/commercial/CommercialSettingsRenderer.kt",
+        ).readText()
+        val controller = File(
+            appDirectory,
+            "src/main/java/com/ninepointnine/desktopcast/commercial/CommercialController.kt",
+        ).readText()
+
+        assertTrue(strings.contains("权益已撤销，需重新获取Pro"))
+        assertTrue(settings.contains("error.reason != CommercialFailure.ENTITLEMENT_REVOKED"))
+        assertTrue(settings.contains("R.string.commercial_reacquire_pro"))
+        assertTrue(controller.contains("if (state.quote == null)"))
+        assertTrue(controller.contains("requestQuote(state.discountCode, notice = null)"))
     }
 
     @Test
