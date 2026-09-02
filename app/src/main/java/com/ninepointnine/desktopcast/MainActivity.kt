@@ -821,10 +821,21 @@ open class MainActivity : AppCompatActivity() {
         renderState(lastState)
     }
 
-    private fun openSettings(section: SettingsSection) {
+    private fun openSettings(
+        section: SettingsSection,
+        triggerEntitlementRecheck: Boolean = true,
+    ) {
         if (lastState.phase in ACTIVE_PHASES) return
         settingsVisible = true
         ensureCommercialSettingsUi()
+        // Opening a settings surface is an entitlement lifecycle boundary;
+        // keep rendering the local state while the online check runs.
+        val controllerAlreadyCreated = commercialController != null
+        ensureCommercialController().also { controller ->
+            if (triggerEntitlementRecheck && controllerAlreadyCreated) {
+                controller.reloadEntitlement()
+            }
+        }
         if (section == SettingsSection.ABOUT) ensureAboutUi()
         renderSettingsSection(section)
         renderState(lastState)
@@ -858,7 +869,14 @@ open class MainActivity : AppCompatActivity() {
         commercialWaitingRenderer.render(state)
         renderWaitingTitle(lastState)
         if (state.checkout is CheckoutState.Paid || state.recovery is RecoveryState.Success) {
-            openSettings(SettingsSection.COMMERCIAL)
+            // This is an automatic navigation caused by the completed
+            // operation. The operation already persisted the new credential;
+            // suppress a second lifecycle check here so QueryStarted cannot
+            // recursively reopen the same Paid state.
+            openSettings(
+                section = SettingsSection.COMMERCIAL,
+                triggerEntitlementRecheck = false,
+            )
         }
     }
 

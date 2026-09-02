@@ -153,7 +153,13 @@ class CastService : LifecycleService() {
     }
 
     fun startCasting() = runOnMain {
-        if (!started.compareAndSet(false, true)) return@runOnMain
+        if (!started.compareAndSet(false, true)) {
+            // A new Activity binding is a service lifecycle boundary even
+            // when the receiver itself is retained across configuration
+            // changes. Recheck entitlement without restarting the receiver.
+            commercialAccess.recheck()
+            return@runOnMain
+        }
         registerCommercialAccessBoundaryReceiver()
         commercialAccess.start()
         playback.beginReceiverLifecycle()
@@ -213,12 +219,13 @@ class CastService : LifecycleService() {
             startCasting()
             return@runOnMain
         }
+        commercialAccess.recheck()
         coordinator.beginStart()
         handleLanAddress(networkMonitor.currentAddress(), force = true)
     }
 
     fun refreshCommercialAccess() = runOnMain {
-        if (started.get()) commercialAccess.refresh()
+        if (started.get()) commercialAccess.recheck()
     }
 
     fun stopCasting() = stopCasting(clearSafetyAlert = true)

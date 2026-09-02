@@ -209,6 +209,17 @@ sealed interface CommercialAccessRefreshResult {
     data class Failure(val reason: CommercialFailure) : CommercialAccessRefreshResult
 }
 
+/**
+ * Result of a gateway entitlement read together with its trust source.
+ * A successful value may still be a local fallback after a transient network
+ * failure; callers that coordinate a lifecycle must not treat that fallback as
+ * a new cloud confirmation.
+ */
+data class CommercialEntitlementReadResult<T>(
+    val value: T,
+    val remoteConfirmed: Boolean = true
+)
+
 sealed interface QuoteRequestResult {
     data class Ready(val quote: ProductQuote) : QuoteRequestResult
     data class Failure(val reason: CommercialFailure) : QuoteRequestResult
@@ -237,6 +248,24 @@ sealed interface PurchaseRecoveryResult {
 }
 
 interface DeviceCommercialGateway {
+    /**
+     * Read-only lifecycle entitlement check. Implementations may update local
+     * credentials only when a separate purchase, trial-start, or recovery
+     * flow explicitly returns a signed license.
+     */
+    suspend fun checkEntitlement(nowEpochMs: Long): CommercialAccessRefreshResult =
+        refreshAccess(nowEpochMs)
+
+    /**
+     * Internal trust-preserving companion to [checkEntitlement]. Existing
+     * gateway implementations keep source compatibility through this default.
+     */
+    suspend fun checkEntitlementRead(
+        nowEpochMs: Long
+    ): CommercialEntitlementReadResult<CommercialAccessRefreshResult> =
+        CommercialEntitlementReadResult(checkEntitlement(nowEpochMs))
+
+    /** Compatibility entry retained for callers compiled against the original API. */
     suspend fun refreshAccess(nowEpochMs: Long): CommercialAccessRefreshResult = when (
         val result = queryEntitlement(nowEpochMs)
     ) {
@@ -247,9 +276,19 @@ interface DeviceCommercialGateway {
     }
 
     suspend fun forceRefreshAccess(nowEpochMs: Long): CommercialAccessRefreshResult =
-        refreshAccess(nowEpochMs)
+        checkEntitlement(nowEpochMs)
 
     suspend fun queryEntitlement(nowEpochMs: Long): EntitlementQueryResult
+
+    /** Trust-preserving companion used by the shared entitlement coordinator. */
+    suspend fun queryEntitlementRead(
+        nowEpochMs: Long,
+        forceRemote: Boolean = true
+    ): CommercialEntitlementReadResult<EntitlementQueryResult> =
+        CommercialEntitlementReadResult(
+            if (forceRemote) forceQueryEntitlement(nowEpochMs)
+            else queryEntitlement(nowEpochMs)
+        )
 
     suspend fun forceQueryEntitlement(nowEpochMs: Long): EntitlementQueryResult =
         queryEntitlement(nowEpochMs)

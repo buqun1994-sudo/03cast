@@ -115,14 +115,15 @@ app/src/main/java/com/ninepointnine/desktopcast/service/CastCommercialAccessAdap
 app/src/main/java/com/ninepointnine/desktopcast/CastCommercialWaitingRenderer.kt
 ```
 
-`CommercialRuntimeAccessGuard` 只缓存已验证的 `Allowed`，在签名续签点和最终边界重新验证。`CastCommercialAccessAdapter` 将商业决定映射为 Router 的授权、清权和输出释放，不让商业包依赖协议实现。
+`CommercialRuntimeAccessGuard` 只缓存已验证的 `Allowed`；试用按签名的 `24h` 短租约和固定七天 `trialEndsAt` 安排一次性复核，永久 PRO 没有本地过期或离线宽限回调。`CastCommercialAccessAdapter` 将商业决定映射为 Router 的授权、清权和输出释放，不让商业包依赖协议实现。
 
 ## 5. 运行流程与微观规则
 
 ```text
 服务启动
   -> 先启动 7000 / 8200 / 1900 / mDNS
-  -> 异步读取本地签名权益并刷新
+  -> 先读取并验签本地签名权益
+  -> 异步通过 purpose=check 调用 license/check
   -> Trial / Pro：授权新媒体会话
   -> 无权益 / Expired / Error：保持 WAITING，拒绝输出但继续广播
 
@@ -140,15 +141,15 @@ app/src/main/java/com/ninepointnine/desktopcast/CastCommercialWaitingRenderer.kt
 |---|---:|---|
 | `Checking` | 拒绝 | 在本地决定完成前不创建输出 |
 | `Trial` | 允许 | 只接受服务端签名的试用边界 |
-| `Pro` | 允许 | 允许到签名的最终离线边界 |
+| `Pro` | 允许 | `validity=permanent`，没有本地过期或离线宽限边界 |
 | `Expired` | 拒绝 | 显示购买 Pro |
 | `Error` | 拒绝 | 若仍有有效本地签名权益，则保留该权益而非伪造试用 |
 
-安全和时间边界沿用 03 歌词已验证常量：许可证签发时间偏差 5 分钟、试用时钟回拨容忍 5 分钟；挑战 / 报价默认 300 秒、订单默认 600 秒、支付轮询由服务端返回并限制在 1 到 10 秒。
+安全和时间边界沿用 03 歌词已验证常量：许可证签发时间偏差 5 分钟、试用时钟回拨容忍 5 分钟；试用单张许可证最长 `24h`，固定七天 `trialEndsAt` 为最终边界；挑战 / 报价默认 300 秒、订单默认 600 秒、支付轮询由服务端返回并限制在 1 到 10 秒。
 
 `CastPlaybackRouter.beginSession`、`beginAirPlayMirrorSession`、`ensureSession` 必须先判断商业准入，再执行现有行车保护。商业拒绝不能调用 `stopCasting`、不能进入 `RECOVERABLE_ERROR`、不能触发行车倒计时、不能发布会关闭窗口的 session-end 事件。协议适配器沿用现有错误响应和空输出路径，不修改 DLNA / AirPlay wire format。
 
-当服务侧重新验证得到撤权、配置缺失、存储失败、时钟回拨或设备不匹配时，`CommercialEntitlementCoordinator` 必须把拒绝投影为共享 `EntitlementState.Error` 快照并通知设置页 / 等待页；只有“本地尚无许可证”保留 `Checking`，等待首次联网试用查询给出权威结果。这样媒体门禁和用户可见状态不会各自停留在不同版本。
+当 `license/check` 得到撤权、配置缺失、存储失败、时钟回拨或设备不匹配时，`CommercialEntitlementCoordinator` 必须把拒绝投影为共享 `EntitlementState.Error` 快照并通知设置页 / 等待页；一般网络失败只记录待复核并保留仍有效的本地凭证，但已明确 `device_key_mismatch` 时，恢复成功并完成新许可证验签持久化前不得把旧凭证作为运行时授权回退。`active` 不签发新许可证、不生成 `licenseId` 或改写本地 bytes；只有本地尚无许可证时才保留 `Checking`，等待首次联网试用查询给出权威结果。
 
 购买或恢复成功后只恢复 gate；本轮不自动重连当前发送端，下一次发送端请求生效。
 
@@ -190,5 +191,5 @@ app/src/main/java/com/ninepointnine/desktopcast/CastCommercialWaitingRenderer.kt
 2. 已落地运行门禁：`CastPlaybackRouter.beginSession`、`beginAirPlayMirrorSession`、`ensureSession` 和 `isCurrent` 均先检查当前已验证权益；拒绝时保留 receiver runtime，不创建媒体输出。
 3. 已落地到期处理：清除授权、失效会话代次、释放媒体输出并回等待，不调用 receiver stop；`ACTION_SCREEN_ON` 和 `ACTION_TIME_CHANGED` 会触发重新验证。
 4. 已落地测试：商业状态机、访问安全、签名协议、报价 / 支付 / 恢复 fixture、Debug / Release 隔离、布局契约和现有会话到期边界均有直接相关单测。
-5. 当前客观边界：`lintDebug` 仍受仓库既有 Media3 opt-in 与资源 lint 阻断；本轮不执行 runtime smoke、截图、坐标点击或真实支付，目标车机交互按验证矩阵由用户手测。
+5. 当前客观边界：本轮 `lintDebug` 已通过；不执行 runtime smoke、截图、坐标点击或真实支付，目标车机交互按验证矩阵由用户手测。
 6. 已补充等待页商业呈现：Trial / Expired 共用服务端报价长广告按钮并把辅助文案放在广告下方；Expired 直接替换主等待标题，Pro 使用缩小后的同源皇冠富文本并独立放在设置入口上方；等待页改为“中上部主状态锚点 + 偏下部权益 / 广告 / 设置锚点”的固定布局；设置标题角标改为 03 歌词同构布局。

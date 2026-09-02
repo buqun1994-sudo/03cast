@@ -7,97 +7,137 @@ import org.junit.Test
 
 class CommercialRuntimeAccessGuardTest {
     @Test
-    fun expiryBoundaryClearsAccessBeforeNotifyingDenial() {
+    fun trialLeaseAndFinalBoundaryAreScheduledSeparately() {
         var now = 10_000L
-        var clearedBeforeDenial = false
-        var denialCount = 0
-        var guardHasAccess = false
         val scheduled = linkedMapOf<Runnable, Long>()
-        lateinit var guard: CommercialRuntimeAccessGuard
-        guard = CommercialRuntimeAccessGuard(
+        val guard = CommercialRuntimeAccessGuard(
             nowEpochMs = { now },
-            evaluateAccess = {
-                CommercialAccessDecision.Denied(CommercialAccessDenial.LICENSE_EXPIRED)
-            },
+            evaluateAccess = { error("lease renewal must use the online callback") },
             scheduleExpiry = { runnable, delay -> scheduled[runnable] = delay },
-            cancelExpiry = { scheduled.remove(it) },
-            onDenied = {
-                clearedBeforeDenial = !guard.hasCurrentAccess()
-                denialCount += 1
-            },
+            cancelExpiry = scheduled::remove,
+            onDenied = {},
+            onTrialLeaseDue = {}
+        )
+
+        guard.authorize(
+            CommercialAccessDecision.Allowed(
+                tier = CommercialTier.TRIAL,
+                expiresAtEpochMs = 15_000L,
+                trialEndsAtEpochMs = 30_000L
+            )
+        )
+
+        assertEquals(setOf(5_000L, 20_000L), scheduled.values.toSet())
+        assertTrue(guard.hasCurrentAccess())
+    }
+
+    @Test
+    fun trialLeaseBoundaryTriggersOneOnlineCheckAndKeepsAccess() {
+        var now = 10_000L
+        var leaseChecks = 0
+        val scheduled = linkedMapOf<Runnable, Long>()
+        val guard = CommercialRuntimeAccessGuard(
+            nowEpochMs = { now },
+            evaluateAccess = { error("lease renewal must use the online callback") },
+            scheduleExpiry = { runnable, delay -> scheduled[runnable] = delay },
+            cancelExpiry = scheduled::remove,
+            onDenied = {},
+            onTrialLeaseDue = { leaseChecks += 1 }
         )
         guard.authorize(
             CommercialAccessDecision.Allowed(
                 tier = CommercialTier.TRIAL,
                 expiresAtEpochMs = 15_000L,
+                trialEndsAtEpochMs = 30_000L
             )
         )
-        guardHasAccess = guard.hasCurrentAccess()
-        val expiry = scheduled.entries.single().key
-        now = 15_000L
-        expiry.run()
-        guardHasAccess = guard.hasCurrentAccess()
 
-        assertTrue(clearedBeforeDenial)
-        assertEquals(1, denialCount)
-        assertFalse(guardHasAccess)
+        val leaseRunnable = scheduled.entries.single { it.value == 5_000L }.key
+        now = 15_000L
+        leaseRunnable.run()
+        leaseRunnable.run()
+
+        assertEquals(1, leaseChecks)
+        assertTrue(guard.hasCurrentAccess())
+        assertEquals(setOf(20_000L), scheduled.values.toSet())
     }
 
     @Test
-    fun refreshBoundaryNotifiesOnceAndKeepsCurrentAccess() {
-        var now = 10_000L
-        var refreshCount = 0
+    fun permanentProHasNoLocalExpiryOrLeaseTimer() {
         val scheduled = linkedMapOf<Runnable, Long>()
+        var leaseChecks = 0
         val guard = CommercialRuntimeAccessGuard(
-            nowEpochMs = { now },
-            evaluateAccess = {
-                CommercialAccessDecision.Allowed(
-                    tier = CommercialTier.PRO,
-                    expiresAtEpochMs = 30_000L,
-                    refreshAfterEpochMs = 15_000L,
-                )
-            },
+            nowEpochMs = { 10_000L },
+            evaluateAccess = { CommercialAccessDecision.Denied(CommercialAccessDenial.LICENSE_EXPIRED) },
             scheduleExpiry = { runnable, delay -> scheduled[runnable] = delay },
-            cancelExpiry = { scheduled.remove(it) },
+            cancelExpiry = scheduled::remove,
             onDenied = {},
-            onRefreshDue = { refreshCount += 1 },
+            onTrialLeaseDue = { leaseChecks += 1 }
         )
+
         guard.authorize(
             CommercialAccessDecision.Allowed(
                 tier = CommercialTier.PRO,
-                expiresAtEpochMs = 30_000L,
-                refreshAfterEpochMs = 15_000L,
+                expiresAtEpochMs = null
             )
         )
-        val refresh = scheduled.entries.minBy { it.value }.key
-        scheduled.remove(refresh)
-        now = 15_000L
-        refresh.run()
-        refresh.run()
 
-        assertEquals(1, refreshCount)
+        assertTrue(scheduled.isEmpty())
+        assertTrue(guard.hasCurrentAccess())
+        assertEquals(0, leaseChecks)
+    }
+
+    @Test
+    fun boundaryRevalidatesAuthoritativeGateAndReschedulesPermission() {
+        var now = 10_000L
+        var nextDecision: CommercialAccessDecision =
+            CommercialAccessDecision.Allowed(CommercialTier.TRIAL, 25_000L)
+        val evaluatedAt = mutableListOf<Long>()
+        val scheduled = linkedMapOf<Runnable, Long>()
+        val guard = CommercialRuntimeAccessGuard(
+            nowEpochMs = { now },
+            evaluateAccess = { at -> evaluatedAt += at; nextDecision },
+            scheduleExpiry = { runnable, delay -> scheduled[runnable] = delay },
+            cancelExpiry = scheduled::remove,
+            onDenied = {},
+            onTrialLeaseDue = {}
+        )
+        guard.authorize(CommercialAccessDecision.Allowed(CommercialTier.TRIAL, 15_000L))
+        val staleExpiry = scheduled.entries.single().key
+
+        now = 12_000L
+        guard.revalidate()
+        now = 15_000L
+        staleExpiry.run()
+
+        assertEquals(listOf(12_000L), evaluatedAt)
         assertTrue(guard.hasCurrentAccess())
     }
 
     @Test
-    fun clearNeutralizesStaleExpiryCallback() {
-        var now = 10_000L
+    fun denialClearsPermissionBeforeCallback() {
+        var clearedBeforeDenial = false
         var denialCount = 0
-        val scheduled = linkedMapOf<Runnable, Long>()
-        val guard = CommercialRuntimeAccessGuard(
-            nowEpochMs = { now },
-            evaluateAccess = { CommercialAccessDecision.Denied(CommercialAccessDenial.NO_LICENSE) },
-            scheduleExpiry = { runnable, delay -> scheduled[runnable] = delay },
-            cancelExpiry = { scheduled.remove(it) },
-            onDenied = { denialCount += 1 },
+        lateinit var guard: CommercialRuntimeAccessGuard
+        guard = CommercialRuntimeAccessGuard(
+            nowEpochMs = { 10_000L },
+            evaluateAccess = {
+                CommercialAccessDecision.Denied(CommercialAccessDenial.ENTITLEMENT_REVOKED)
+            },
+            scheduleExpiry = { _, _ -> },
+            cancelExpiry = {},
+            onDenied = {
+                clearedBeforeDenial = !guard.hasCurrentAccess()
+                denialCount += 1
+            }
         )
-        guard.authorize(CommercialAccessDecision.Allowed(CommercialTier.TRIAL, 15_000L))
-        val stale = scheduled.entries.single().key
-        guard.clear()
-        now = 15_000L
-        stale.run()
+        guard.authorize(CommercialAccessDecision.Allowed(CommercialTier.PRO, null))
 
+        guard.revalidate()
+        guard.revalidate()
+
+        assertTrue(clearedBeforeDenial)
+        assertEquals(1, denialCount)
         assertFalse(guard.hasCurrentAccess())
-        assertEquals(0, denialCount)
     }
 }

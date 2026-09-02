@@ -1,8 +1,17 @@
 # 项目进度
 
+## 2026-09-02 03cast 永久 PRO 与生命周期在线复核移植
+
+1. 已完成：将 03 歌词已验收的设备商业生命周期主链移植到 `03cast`，产品身份保持 `03cast / 03cast_pro_device_cny / com.ninepointnine.desktopcast / icar03`，未修改 03 歌词或 cloud。
+2. 已完成：客户端启动、新的 `CastService` 生命周期、用户重试和设置页打开先验签本地许可证，再以 `purpose=check` challenge 调用 `POST /v1/products/03cast/device-access/license/check`；`active` 不签发新许可证、不生成 `licenseId`、不改写本地许可证 bytes。
+3. 已完成：购买 / 恢复签发的 PRO 许可证使用 `validity=permanent`，三个时间字段均为 `null`；试用固定七天，单张试用许可证最长 24 小时，租约到期时沿用当前设备密钥取得下一张租约。
+4. 已完成：云端 `revoked` 清除本地许可证、device token、支付与待复核记录，并仅释放投屏媒体输出；接收 runtime、DLNA / AirPlay 广播、窗口和行车安全主链保持原有边界。一般网络失败保留仍有效凭证并记录待复核；云端明确 `device_key_mismatch` 后，恢复成功并完成新许可证验签持久化前不会用旧凭证放行。
+5. 已补充：Debug fixture 的 `license/check` 路由、请求计数和永久 / 短租约许可证；商业网关、协调器、运行时守卫、服务适配器及直接相关 JVM 用例已同步，并覆盖密钥不匹配恢复失败的 fail-closed 边界。
+6. 已验证：本轮最终项目检查、Debug 单测、Debug 构建、Release Kotlin 编译和 `lintDebug` 均通过；真实 S56_HQX 车机上的生命周期复核、退款撤权、端口释放和 DLNA / AirPlay 商业门禁仍按验证矩阵由用户手测，未默认安装或运行 smoke。
+
 ## 2026-08-24 Release 版本规则
 
-1. Release 版本真值固定在根目录 `release-version.properties`，当前 `versionName=1.0.0-icar03`；Debug / Staging 继续使用原有 `0.1.0` 基线。
+1. Release 版本真值固定在根目录 `release-version.properties`，当前 `versionName=1.0.1-icar03`；Debug / Staging 继续使用原有 `0.1.0` 基线。
 2. 未指定版本时由 `scripts/bump-release-version.mjs` 递增 patch 并同步递增 `versionCode`；明确指定版本时使用传入值。构建过程不会自动改写版本文件。
 
 ## 2026-08-17 项目初始化

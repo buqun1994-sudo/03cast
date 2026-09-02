@@ -44,7 +44,9 @@ class CommercialController(
     val state: CommercialUiState
         get() = stateMachine.state
 
-    fun start() = reloadEntitlement(forceRemote = false)
+    /** Settings entry is an entitlement lifecycle boundary, so it always
+     * starts an asynchronous online recheck alongside the local read. */
+    fun start() = reloadEntitlement(forceRemote = true)
 
     fun close() {
         removeSnapshotListener()
@@ -127,6 +129,7 @@ class CommercialController(
                     }
                 }
                 PaymentCreationResult.AlreadyOwned -> {
+                    entitlementCoordinator.clearAuthoritativeDenial(nowEpochMs())
                     publishFromOperation(
                         CommercialAction.PaymentAlreadyOwned(quote.finalPrice)
                     )
@@ -161,6 +164,11 @@ class CommercialController(
         ) {
             when (val result = gateway.restorePurchase(nowEpochMs())) {
                 is PurchaseRecoveryResult.Success -> {
+                    if (result.entitlement is EntitlementState.Pro ||
+                        result.entitlement is EntitlementState.Trial
+                    ) {
+                        entitlementCoordinator.clearAuthoritativeDenial(nowEpochMs())
+                    }
                     publishFromOperation(CommercialAction.RecoverySucceeded(result.entitlement))
                     notifyAccessChangedFromOperation(CommercialAccessUpdate.RECHECK)
                 }
@@ -241,6 +249,7 @@ class CommercialController(
                 true
             }
             PaymentStatusResult.Paid -> {
+                entitlementCoordinator.clearAuthoritativeDenial(nowEpochMs())
                 publish(CommercialAction.PaymentPaid)
                 notifyAccessChangedFromOperation(CommercialAccessUpdate.RECHECK)
                 false

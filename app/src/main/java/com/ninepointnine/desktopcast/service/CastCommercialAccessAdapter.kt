@@ -5,6 +5,7 @@ import android.os.Handler
 import android.util.Log
 import com.ninepointnine.desktopcast.commercial.CommercialAccessDecision
 import com.ninepointnine.desktopcast.commercial.CommercialAccessRefreshResult
+import com.ninepointnine.desktopcast.commercial.CommercialEntitlementCheckResult
 import com.ninepointnine.desktopcast.commercial.CommercialFailure
 import com.ninepointnine.desktopcast.commercial.CommercialRuntimeAccessGuard
 import com.ninepointnine.desktopcast.commercial.CommercialRuntimeFactory
@@ -29,8 +30,10 @@ internal class CastCommercialAccessAdapter(
     private val onAccessDenied: (CommercialAccessDecision.Denied) -> Unit,
 ) : CastCommercialAccessPort {
     private val coordinator = CommercialRuntimeFactory.entitlementCoordinator(context.applicationContext)
-    private var refreshJob: Job? = null
+    private var checkJob: Job? = null
+    private var checkGeneration = 0L
     private var hadAuthorizedAccess = false
+    private var trialLeaseCheckPending = false
     private val guard = CommercialRuntimeAccessGuard(
         nowEpochMs = System::currentTimeMillis,
         evaluateAccess = { now -> coordinator.evaluate(now) },
@@ -40,7 +43,7 @@ internal class CastCommercialAccessAdapter(
             hadAuthorizedAccess = false
             onAccessDenied(denied)
         },
-        onRefreshDue = { refresh(forceRemote = true) },
+        onTrialLeaseDue = ::recheckCommercialEntitlementAtTrialLease,
     )
 
     fun start() {
@@ -51,29 +54,50 @@ internal class CastCommercialAccessAdapter(
             guard.clear()
             hadAuthorizedAccess = false
         }
-        refresh(forceRemote = false)
+        recheck()
     }
 
-    fun refresh(forceRemote: Boolean = true) {
-        refreshJob?.cancel()
-        refreshJob = scope.launch(Dispatchers.IO) {
+    /** Starts the read-only cloud entitlement check for a service lifecycle. */
+    fun recheck() {
+        // A lifecycle recheck supersedes a trial-lease callback that may still
+        // be in flight.  Leaving this set would suppress every later lease
+        // boundary after the superseding job is cancelled.
+        trialLeaseCheckPending = false
+        launchEntitlementCheck(::reconcile)
+    }
+
+    /** Compatibility wrapper for callers that still use the old refresh name. */
+    fun refresh(@Suppress("UNUSED_PARAMETER") forceRemote: Boolean = true) {
+        recheck()
+    }
+
+    private fun launchEntitlementCheck(onComplete: (CommercialEntitlementCheckResult) -> Unit) {
+        val generation = ++checkGeneration
+        checkJob?.cancel()
+        checkJob = scope.launch(Dispatchers.IO) {
             val result = try {
-                coordinator.refreshAccess(System.currentTimeMillis(), forceRemote)
+                coordinator.recheckEntitlementWithDecision(System.currentTimeMillis())
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(TAG, "Commercial access refresh failed", error)
-                CommercialAccessRefreshResult.Failure(CommercialFailure.UNKNOWN)
+                Log.w(TAG, "Commercial entitlement recheck failed", error)
+                CommercialEntitlementCheckResult(
+                    result = CommercialAccessRefreshResult.Failure(CommercialFailure.UNKNOWN),
+                    access = coordinator.evaluate(System.currentTimeMillis())
+                )
             }
             withContext(Dispatchers.Main.immediate) {
-                reconcile(result)
+                if (generation != checkGeneration) return@withContext
+                onComplete(result)
             }
         }
     }
 
     fun clear() {
-        refreshJob?.cancel()
-        refreshJob = null
+        checkGeneration += 1
+        checkJob?.cancel()
+        checkJob = null
+        trialLeaseCheckPending = false
         guard.clear()
         hadAuthorizedAccess = false
     }
@@ -86,13 +110,26 @@ internal class CastCommercialAccessAdapter(
     override fun hasCurrentAccess(): Boolean = guard.hasCurrentAccess()
 
     override fun onMediaAttemptDenied() {
-        // Publish the latest locally verified state so the Activity can show
-        // the same expired / error result without touching the receiver.
-        coordinator.evaluate(System.currentTimeMillis())
+        // The coordinator already published the state that caused the gate to
+        // deny this attempt.  Re-evaluating here could resurrect a locally
+        // stored PRO license after an authoritative remote denial.
     }
 
-    private fun reconcile(result: CommercialAccessRefreshResult) {
-        val decision = coordinator.evaluate(System.currentTimeMillis())
+    private fun recheckCommercialEntitlementAtTrialLease() {
+        if (trialLeaseCheckPending) return
+        trialLeaseCheckPending = true
+        Log.i(TAG, "Commercial trial lease boundary reached; checking entitlement")
+        launchEntitlementCheck(::finishTrialLeaseCheck)
+    }
+
+    private fun finishTrialLeaseCheck(result: CommercialEntitlementCheckResult) {
+        if (!trialLeaseCheckPending) return
+        trialLeaseCheckPending = false
+        reconcile(result)
+    }
+
+    private fun reconcile(check: CommercialEntitlementCheckResult) {
+        val decision = check.access
         when (decision) {
             is CommercialAccessDecision.Allowed -> authorize(decision)
             is CommercialAccessDecision.Denied -> {
@@ -100,8 +137,12 @@ internal class CastCommercialAccessAdapter(
                 guard.clear()
                 hadAuthorizedAccess = false
                 if (wasAuthorized) onAccessDenied(decision)
-                if (result is CommercialAccessRefreshResult.Failure) {
-                    Log.i(TAG, "Commercial access remains denied after refresh: ${result.reason}")
+                if (check.result is CommercialAccessRefreshResult.Failure) {
+                    Log.i(
+                        TAG,
+                        "Commercial access remains denied after entitlement check: " +
+                            check.result.reason
+                    )
                 }
             }
         }
