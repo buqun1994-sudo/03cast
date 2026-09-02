@@ -1,5 +1,16 @@
 # 项目进度
 
+## 2026-09-02 03cast 商业页面导航与生命周期复核解耦（已完成）
+
+1. 已定位：`MainActivity.openSettings()` 把同一 Activity 内的设置分区切换误当成权益生命周期，进入订单页和二维码返回都会启动新的查询；查询完成后状态机又无条件按待支付快照重建页面，导致订单页回权益首页、二维码返回后重入二维码。
+2. 已施工：标准窗口的在线权益复核收敛到 `MainActivity.onStart`；`FullscreenActivity` 不重复承担 UI 复核；设置分区、权益首页、订单页和二维码返回不再触发 `reloadEntitlement`，支付会话持久化与 `CastService` 生命周期复核保持不变。
+3. 已施工：`CommercialUiState` 增加页面 owner，状态机在同一查询尚未完成时保持用户选择；支付创建后的二维码由操作 owner 持有，避免空待支付快照清掉刚创建的会话；新生命周期清除 owner 并可恢复权威待支付二维码，`Pro` / 撤权 / 设备不匹配等权威结果仍强制覆盖页面。
+4. 已补充：`CommercialStateMachineTest` 覆盖晚到待支付快照、晚到空待支付快照、新生命周期恢复二维码和权威 Pro 覆盖订单页；相关安全规则、施工方案和验证矩阵已同步。
+5. 已验证：全量 Debug JVM 单测 `164` 条通过，Debug lint、Debug assemble、项目就绪检查、技能检查和 `git diff --check` 通过；模板快检因本仓库是已初始化具体项目而按预期不适用，多语言快检因项目没有 `src/locales` 而不适用。
+6. 已构建并校验：staging Debug `0.1.0` / versionCode `1`，APK `27101947` 字节、SHA-256 `cd6b5157ca8a8fb424f48e42b913437962728ba5037f64f93a9939dc7700830e`；production Release `1.0.2-icar03` / versionCode `3`，APK `11664485` 字节、SHA-256 `2f10fe848f3ce928d54750968fd408f9889c3adf814d383bf8a9cb1416f8a5c9`。两包均为 `com.ninepointnine.desktopcast`、单 signer、APK v2，证书摘要分别与 staging / production 登记值一致。
+7. 桌面产物：staging APK / ZIP 已覆盖原文件；production 生成 `03投屏-v1.0.2-icar03.apk` 与 `03投屏-v1.0.2-icar03.zip`，旧 `1.0.1` 文件保留以避免版本元数据与文件名不一致。两个 ZIP 均只有一个同名 APK 条目、UTF-8 文件名标志、解压字节与 APK 一致；staging ZIP `10158895` 字节 / SHA-256 `23b42426ba2e41d09b7c53be1defd6f1de4dbc13197a7e674d86911d19fa3405`，production ZIP `4787608` 字节 / SHA-256 `18ff916c66c450fb41e173bead67a3884fe495abb1e494f9b4e3732e0d262771`。
+8. 目标车机订单页 / 二维码返回仍需按验证矩阵手测，未宣称交互验收完成。
+
 ## 2026-09-02 staging 与 production 包重新构建并覆盖（完成）
 
 1. 已从已推送提交 `b91ca7c` 重新构建 staging Debug（`0.1.0` / versionCode `1`）和 production Release（`1.0.1-icar03` / versionCode `2`）；Release 的 R8、资源收缩和签名任务均成功。
@@ -11,7 +22,7 @@
 ## 2026-09-02 03cast 永久 PRO 与生命周期在线复核移植
 
 1. 已完成：将 03 歌词已验收的设备商业生命周期主链移植到 `03cast`，产品身份保持 `03cast / 03cast_pro_device_cny / com.ninepointnine.desktopcast / icar03`，未修改 03 歌词或 cloud。
-2. 已完成：客户端启动、新的 `CastService` 生命周期、用户重试和设置页打开先验签本地许可证，再以 `purpose=check` challenge 调用 `POST /v1/products/03cast/device-access/license/check`；`active` 不签发新许可证、不生成 `licenseId`、不改写本地许可证 bytes。
+2. 已完成：客户端启动、新的 `CastService` 生命周期和用户重试先验签本地许可证，再以 `purpose=check` challenge 调用 `POST /v1/products/03cast/device-access/license/check`；设置页与订单 / 二维码页在同一主窗口内，不单独触发复核；`active` 不签发新许可证、不生成 `licenseId`、不改写本地许可证 bytes。
 3. 已完成：购买 / 恢复签发的 PRO 许可证使用 `validity=permanent`，三个时间字段均为 `null`；试用固定七天，单张试用许可证最长 24 小时，租约到期时沿用当前设备密钥取得下一张租约。
 4. 已完成：云端 `revoked` 清除本地许可证、device token、支付与待复核记录，并仅释放投屏媒体输出；接收 runtime、DLNA / AirPlay 广播、窗口和行车安全主链保持原有边界。一般网络失败保留仍有效凭证并记录待复核；云端明确 `device_key_mismatch` 后，恢复成功并完成新许可证验签持久化前不会用旧凭证放行。
 5. 已补充：Debug fixture 的 `license/check` 路由、请求计数和永久 / 短租约许可证；商业网关、协调器、运行时守卫、服务适配器及直接相关 JVM 用例已同步，并覆盖密钥不匹配恢复失败的 fail-closed 边界。

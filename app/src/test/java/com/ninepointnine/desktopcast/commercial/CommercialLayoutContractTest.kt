@@ -1,5 +1,6 @@
 package com.ninepointnine.desktopcast.commercial
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -142,6 +143,27 @@ class CommercialLayoutContractTest {
         assertTrue(service.contains("registerCommercialAccessBoundaryReceiver()"))
         assertTrue(service.contains("ACTION_SCREEN_ON"))
         assertTrue(service.contains("ACTION_TIME_CHANGED"))
+    }
+
+    @Test
+    fun embeddedCommercialPagesDoNotStartTheirOwnEntitlementCheck() {
+        val mainActivity = File(
+            findAppDirectory(),
+            "src/main/java/com/ninepointnine/desktopcast/MainActivity.kt",
+        ).readText()
+        val start = mainActivity.indexOf("override fun onStart()")
+        val openSettings = mainActivity.indexOf("private fun openSettings(")
+        val openEntitlement = mainActivity.indexOf(
+            "private fun openCommercialEntitlement()",
+            openSettings,
+        )
+        require(start >= 0 && openSettings >= 0 && openEntitlement > openSettings)
+
+        val lifecycleBody = mainActivity.substring(start, openSettings)
+        val settingsBody = mainActivity.substring(openSettings, openEntitlement)
+        assertTrue(lifecycleBody.contains("ensureCommercialController().start()"))
+        assertFalse(settingsBody.contains("reloadEntitlement()"))
+        assertFalse(settingsBody.contains("triggerEntitlementRecheck"))
     }
 
     private fun findAppDirectory(): File {

@@ -44,8 +44,11 @@ class CommercialController(
     val state: CommercialUiState
         get() = stateMachine.state
 
-    /** Settings entry is an entitlement lifecycle boundary, so it always
-     * starts an asynchronous online recheck alongside the local read. */
+    /**
+     * Starts the asynchronous online check for the owning Activity / service
+     * lifecycle. Embedded page navigation must call only the page actions
+     * below and never start another entitlement operation.
+     */
     fun start() = reloadEntitlement(forceRemote = true)
 
     fun close() {
@@ -305,8 +308,19 @@ class CommercialController(
     private fun onEntitlementSnapshot(snapshot: EntitlementSnapshot) {
         scope.launch {
             applySnapshotFromOperation(snapshot)
-            val pendingPayment = snapshot.pendingPayment
-            if (pendingPayment == null) {
+            // A query can have started before payment creation and return an
+            // older snapshot with no pending session. Keep polling the
+            // operation-owned QR session in that case; a fresh lifecycle has
+            // already cleared the QR owner and will fail closed instead.
+            val sessionToPoll = snapshot.pendingPayment ?: withContext(mainDispatcher) {
+                val state = state
+                if (state.navigationIntent == CommercialNavigationIntent.QR) {
+                    (state.checkout as? CheckoutState.AwaitingPayment)?.session
+                } else {
+                    null
+                }
+            }
+            if (sessionToPoll == null) {
                 // A service-side entitlement refresh can clear an old purchase
                 // session while this controller is still displaying the page.
                 // Stop that session's poller as soon as the shared snapshot
@@ -314,7 +328,7 @@ class CommercialController(
                 paymentPolling?.cancel()
                 paymentPolling = null
             } else {
-                startPaymentPolling(pendingPayment)
+                startPaymentPolling(sessionToPoll)
             }
         }
     }

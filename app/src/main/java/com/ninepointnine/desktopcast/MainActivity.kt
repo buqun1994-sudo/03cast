@@ -224,6 +224,12 @@ open class MainActivity : AppCompatActivity() {
         if (synchronizeThemeConfiguration()) return
         refreshThemePalette()
         syncFullscreenControlState()
+        // Settings live inside this Activity rather than in a separate
+        // window. The standard window's start boundary is therefore the one
+        // UI entitlement check; page navigation below stays side-effect free.
+        if (!isFullscreenWindow) {
+            ensureCommercialController().start()
+        }
         if (!bindingRequested) {
             bindingRequested = bindService(
                 Intent(this, CastService::class.java),
@@ -300,7 +306,6 @@ open class MainActivity : AppCompatActivity() {
         ).also { controller ->
             commercialController = controller
             CommercialVariantUi.handleDebugIntent(this, intent, controller)
-            controller.start()
         }
     }
 
@@ -821,21 +826,14 @@ open class MainActivity : AppCompatActivity() {
         renderState(lastState)
     }
 
-    private fun openSettings(
-        section: SettingsSection,
-        triggerEntitlementRecheck: Boolean = true,
-    ) {
+    private fun openSettings(section: SettingsSection) {
         if (lastState.phase in ACTIVE_PHASES) return
         settingsVisible = true
         ensureCommercialSettingsUi()
-        // Opening a settings surface is an entitlement lifecycle boundary;
-        // keep rendering the local state while the online check runs.
-        val controllerAlreadyCreated = commercialController != null
-        ensureCommercialController().also { controller ->
-            if (triggerEntitlementRecheck && controllerAlreadyCreated) {
-                controller.reloadEntitlement()
-            }
-        }
+        // The standard Activity already performed its lifecycle check in
+        // onStart. Switching between embedded settings pages must only alter
+        // presentation and never start another entitlement operation.
+        ensureCommercialController()
         if (section == SettingsSection.ABOUT) ensureAboutUi()
         renderSettingsSection(section)
         renderState(lastState)
@@ -850,11 +848,6 @@ open class MainActivity : AppCompatActivity() {
         val controller = ensureCommercialController()
         openSettings(SettingsSection.COMMERCIAL)
         controller.showCheckout()
-        if (controller.state.quote == null &&
-            controller.state.entitlement !is EntitlementState.Pro
-        ) {
-            controller.reloadEntitlement()
-        }
     }
 
     private fun refreshCommercialAccess(update: CommercialAccessUpdate) {
@@ -871,12 +864,8 @@ open class MainActivity : AppCompatActivity() {
         if (state.checkout is CheckoutState.Paid || state.recovery is RecoveryState.Success) {
             // This is an automatic navigation caused by the completed
             // operation. The operation already persisted the new credential;
-            // suppress a second lifecycle check here so QueryStarted cannot
-            // recursively reopen the same Paid state.
-            openSettings(
-                section = SettingsSection.COMMERCIAL,
-                triggerEntitlementRecheck = false,
-            )
+            // page presentation must not start a second lifecycle check.
+            openSettings(SettingsSection.COMMERCIAL)
         }
     }
 

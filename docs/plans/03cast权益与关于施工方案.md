@@ -151,6 +151,8 @@ app/src/main/java/com/ninepointnine/desktopcast/CastCommercialWaitingRenderer.kt
 
 当 `license/check` 得到撤权、配置缺失、存储失败、时钟回拨或设备不匹配时，`CommercialEntitlementCoordinator` 必须把拒绝投影为共享 `EntitlementState.Error` 快照并通知设置页 / 等待页；一般网络失败只记录待复核并保留仍有效的本地凭证，但已明确 `device_key_mismatch` 时，恢复成功并完成新许可证验签持久化前不得把旧凭证作为运行时授权回退。`active` 不签发新许可证、不生成 `licenseId` 或改写本地 bytes；只有本地尚无许可证时才保留 `Checking`，等待首次联网试用查询给出权威结果。
 
+标准主窗口的 `onStart` 是嵌入式设置页共用的 UI 复核边界；权益首页、订单页和二维码页之间的切换只派发页面 owner，不重新调用 `license/check`。状态机在同一查询尚未完成时保持用户已选页面，支付创建后二维码由当前支付操作 owner 持有；新一轮生命周期才清除 owner 并允许按持久化待支付会话恢复二维码；`Pro`、撤权和其它权威拒绝仍覆盖页面 owner。
+
 购买或恢复成功后只恢复 gate；本轮不自动重连当前发送端，下一次发送端请求生效。
 
 ## 6. 绝对不能碰
@@ -167,7 +169,7 @@ app/src/main/java/com/ninepointnine/desktopcast/CastCommercialWaitingRenderer.kt
 
 1. 商业验签、产品 / 包名 / 设备公钥 / 应用签名摘要隔离。
 2. 无许可证、试用、过期、Pro、撤权、时钟回拨、网络失败和存储失败。
-3. Activity 与 CastService 共用 coordinator，刷新单飞且状态可恢复。
+3. Activity 与 CastService 共用 coordinator，生命周期复核单飞且状态可恢复；嵌入式页面导航不触发额外复核，晚到快照不得覆盖权益 / 订单 / 二维码 owner，新的生命周期仍可恢复待支付二维码。
 4. 报价变化二次确认、订单轮询、支付成功、已购买和恢复购买。
 5. 商业拒绝不停止广播、不创建输出；播放中到期释放输出并回到等待。
 6. 现有 `CastSessionCoordinatorTest`、窗口交接、安全和协议单测不回归。
