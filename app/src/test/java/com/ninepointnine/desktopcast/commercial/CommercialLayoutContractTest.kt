@@ -41,6 +41,10 @@ class CommercialLayoutContractTest {
         assertTrue(commercial.contains("commercial_entitlement_page"))
         assertTrue(commercial.contains("commercial_order_page"))
         assertTrue(commercial.contains("commercial_qr_page"))
+        assertTrue(about.contains("about_version_item"))
+        assertTrue(about.contains("about_version_value"))
+        assertTrue(about.indexOf("about_version_item") < about.indexOf("about_terms_card"))
+        assertTrue(strings.contains("settings_about_version_label"))
         assertTrue(about.contains("about_terms_qr"))
         assertTrue(waiting.contains("cast_commercial_purchase_ad"))
         assertTrue(waiting.contains("cast_commercial_waiting_purchase_detail"))
@@ -71,6 +75,7 @@ class CommercialLayoutContractTest {
         assertTrue(activity.contains("<ViewStub"))
         assertTrue(mainActivity.contains("ensureCommercialSettingsUi()"))
         assertTrue(mainActivity.contains("ensureAboutUi()"))
+        assertTrue(mainActivity.contains("aboutVersionValue.text = BuildConfig.VERSION_NAME"))
         assertTrue(mainActivity.contains("ensureDrivingAgreementQrCode()"))
         assertTrue(
             mainActivity.indexOf("private fun ensureAboutUi()") <

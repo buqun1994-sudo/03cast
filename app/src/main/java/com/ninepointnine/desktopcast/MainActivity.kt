@@ -24,6 +24,7 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.PopupWindow
+import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -86,6 +87,7 @@ open class MainActivity : AppCompatActivity() {
     private lateinit var mediaFullscreenControl: View
     private var settingsCommercialContent: View? = null
     private var settingsAboutContent: View? = null
+    private lateinit var aboutVersionValue: TextView
     private lateinit var windowNavigator: CastWindowNavigator
     private var settingsVisible = false
     private var selectedSettingsSection = SettingsSection.RECEIVER
@@ -345,6 +347,8 @@ open class MainActivity : AppCompatActivity() {
         if (settingsAboutContent != null) return
         val content = binding.root.findViewById<ViewStub>(R.id.settings_about_stub).inflate()
         settingsAboutContent = content
+        aboutVersionValue = content.findViewById(R.id.about_version_value)
+        aboutVersionValue.text = BuildConfig.VERSION_NAME
         content.findViewById<ImageView>(R.id.about_terms_qr).apply {
             setImageBitmap(TermsQrCodeFactory.create(BuildConfig.TERMS_URL, ABOUT_QR_BITMAP_SIZE_PX))
             contentDescription = getString(R.string.accessibility_about_terms_qr)

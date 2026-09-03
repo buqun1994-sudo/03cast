@@ -52,6 +52,7 @@
     <string name="accessibility_switch_off">已关闭</string>
     <string name="settings_navigation_entitlement">权益中心</string>
     <string name="settings_navigation_about">关于</string>
+    <string name="settings_about_version_label">版本号</string>
     <string name="settings_about_terms">用户协议</string>
     <string name="commercial_badge_trial">试用</string>
     <string name="commercial_badge_expired">过期</string>
