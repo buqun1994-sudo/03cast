@@ -1,5 +1,6 @@
 package com.ninepointnine.desktopcast.commercial
 
+import com.ninepointnine.desktopcast.BuildConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -32,7 +33,9 @@ class CommercialVariantIsolationTest {
     fun productContractIsolatedFrom03lyrics() {
         assertEquals("03cast", DeviceCommerceProductContract.PRODUCT_ID)
         assertEquals("03cast_pro_device_cny", DeviceCommerceProductContract.SKU)
-        assertEquals("com.ninepointnine.desktopcast", DeviceCommerceProductContract.PACKAGE_NAME)
+        assertEquals(BuildConfig.APPLICATION_ID, DeviceCommerceProductContract.PACKAGE_NAME)
+        assertEquals("com.ninepointnine.desktopcast", DeviceCommerceProductContract.PRODUCTION_PACKAGE_NAME)
+        assertEquals("com.ninepointnine.desktopcast.test", DeviceCommerceProductContract.TEST_PACKAGE_NAME)
         assertFalse(DeviceCommerceProductContract.PRODUCT_ID == "03lyrics")
         assertFalse(DeviceCommerceProductContract.SKU.contains("03lyrics"))
     }

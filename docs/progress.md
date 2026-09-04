@@ -1,5 +1,11 @@
 # 项目进度
 
+## 2026-09-03 staging 测试包版本升级（完成，待用户主测）
+
+1. `release-version.properties` 已递增为 `1.0.3-icar03` / `versionCode=4`，Cloud 03 APP 登记同步为 staging `1.0.3-icar03-test (4)`。
+2. 通过 Cloud 统一 staging 入口生成桌面目录 `03系列测试包-新/03投屏-staging-v1.0.3-icar03-test.apk` 与对应 ZIP；APK / ZIP SHA-256 为 `f0bf1714bd6857bbb888ff0e7107fdd409fb9d82120ea43eff9e5fc629976298` / `65b3fe9ba2919db0200c463b97d18b1af7d97b968a5599422d42fb78f005e10d`。
+3. 构建器已校验测试包名、版本、staging 证书、APK v2 签名及 ZIP 单 APK 条目；保留仓库原有未提交业务改动，未执行设备安装、蓝奏上传或提交 / 推送。
+
 ## 2026-09-02 真实 Staging 退款 / 试用到期链路复核（已完成）
 
 1. 已纠正验证基线：此前安装的 Debug fixture 不能代表测试环境；本轮安装真实 Staging Debug（`https://api-staging.9studio.fun`、`com.ninepointnine.desktopcast`、Staging 证书摘要 `98740b95c30064f727b9401a851ecf2e576d5e5c38fcc318284578747ba50e2a`）。设备安装 APK 与桌面 staging APK SHA-256 均为 `4be0c018ac45abcfe6c33ad6c7a531e2c3d50a2776d298187824067693e3e37c`。
@@ -157,3 +163,10 @@
 1. 用户在目标车机多次手测哔哩哔哩 DLNA 播放中的“浮窗 -> 全屏 -> 浮窗”，确认不再出现“该内容暂时无法播放”，播放不中断，进程和接收服务保持正常。
 2. 切换期间仍会出现数秒级黑屏，但声音连续，随后画面恢复；该现象与 Android 9 高通 codec 在跨 Activity BufferQueue 上安全摘除并重建、等待下一组视频关键帧一致，不是网络断流、DLNA URL 失效或播放器崩溃。
 3. 本轮最终验收口径以稳定性优先：允许这段首帧等待，禁止播放中断、错误页、不可恢复黑屏、旧全屏残影和后台接收异常。零黑屏需要改为同一 Activity / 同一 Surface / 同一 codec 的窗口主链，超出本轮已接受范围，暂不施工。
+# 项目进度
+
+## 2026-09-03 03 APP 测试身份简化（施工中，未发布）
+
+1. 正式包名保持 `com.ninepointnine.desktopcast`；Debug/staging 测试包统一为 `com.ninepointnine.desktopcast.test`，版本名在同一正式版本后追加 `-test`。
+2. Debug/staging 与 Release 共用根目录 `release-version.properties`（当前 `1.0.2-icar03` / `versionCode=3`）；每次只递增这一份版本文件即可连续覆盖更新测试包。测试包与正式包可并存，不能互相覆盖升级。
+3. 本轮只同步构建、台账、检查和文档规则，不生成、不上传、不部署、不上线产物。

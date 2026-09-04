@@ -184,8 +184,8 @@ android {
         applicationId = "com.ninepointnine.desktopcast"
         minSdk = 28
         targetSdk = 28
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -227,6 +227,8 @@ android {
 
     buildTypes {
         getByName("debug") {
+            applicationIdSuffix = ".test"
+            versionNameSuffix = "-test"
             if (stagingSigningStoreFile != null) {
                 signingConfigs.findByName("staging")?.let { signingConfig = it }
             }

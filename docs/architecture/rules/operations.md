@@ -16,4 +16,4 @@
 
 ## 3. Release 版本
 
-1. 触发条件：准备 Release 版本。动作：读取仓库根 `release-version.properties`；未指定版本时运行 `node scripts/bump-release-version.mjs` 递增 patch 并同步递增 `releaseVersionCode`，有明确版本时传入 `--version`；构建不会自行改写版本文件，Debug / Staging 不读取 Release 版本覆盖。验证：`node scripts/bump-release-version.mjs --check`、Release APK 元数据和签名核对。边界：不把版本递增等同于部署、上线或车机安装。
+1. 触发条件：准备测试或 Release 版本。动作：所有变体读取仓库根 `release-version.properties`；未指定版本时运行 `node scripts/bump-release-version.mjs` 递增 patch 并同步递增 `releaseVersionCode`，有明确版本时传入 `--version`。Debug/staging 只追加 `applicationIdSuffix=".test"` 和 `versionNameSuffix="-test"`，不创建第二套版本文件。验证：`node scripts/bump-release-version.mjs --check`、按目标变体核对 APK 包名、版本和签名。边界：不把版本递增等同于部署、上线或车机安装。

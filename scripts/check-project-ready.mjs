@@ -63,6 +63,8 @@ const agents = read("AGENTS.md");
 const architecture = read("docs/architecture/项目长期总纲.md");
 const product = read("docs/product/产品需求基线.md");
 const testing = read("docs/testing/验证矩阵.md");
+const appBuild = read("app/build.gradle.kts");
+const releaseVersion = read("release-version.properties");
 
 for (const [file, content] of [
   ["AGENTS.md", agents],
@@ -89,6 +91,24 @@ if (state?.projectName) {
 
 if (state?.projectType && !existsSync(join(root, "docs", "blueprints", `${state.projectType}.md`))) {
   failures.push(`缺少项目类型 blueprint：${state.projectType}`);
+}
+
+for (const expected of [
+  'namespace = "com.ninepointnine.desktopcast"',
+  'applicationId = "com.ninepointnine.desktopcast"',
+  'applicationIdSuffix = ".test"',
+  'versionNameSuffix = "-test"',
+  "versionCode = releaseVersionCode",
+  "versionName = releaseVersionName",
+]) {
+  if (!appBuild.includes(expected)) failures.push(`Android 配置缺少：${expected}`);
+}
+const releaseVersionName = releaseVersion.match(/^releaseVersionName\s*=\s*(\S+)$/m)?.[1];
+const releaseVersionCode = releaseVersion.match(/^releaseVersionCode\s*=\s*(\d+)$/m)?.[1];
+if (!releaseVersionName || !releaseVersionCode) {
+  failures.push("release-version.properties 缺少合法版本入口");
+} else if (!architecture.includes(releaseVersionName) || !architecture.includes(releaseVersionCode)) {
+  failures.push("架构总纲未同步 release-version.properties 版本");
 }
 
 if (/待补齐/.test(product)) {
