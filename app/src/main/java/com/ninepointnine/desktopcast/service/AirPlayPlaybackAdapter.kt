@@ -54,6 +54,8 @@ internal class AirPlayPlaybackAdapter(
     private var detail = ""
     private var transportDestroySequence = 0L
     private var pendingTransportDestroy: Runnable? = null
+    private var networkEndSequence = 0L
+    private var pendingNetworkEnd: Runnable? = null
 
     private val mutableArtwork = MutableStateFlow<Bitmap?>(null)
     val artwork: StateFlow<Bitmap?> = mutableArtwork.asStateFlow()
@@ -340,7 +342,7 @@ internal class AirPlayPlaybackAdapter(
         // connection. It is therefore only a fallback signal; authoritative
         // mirror/audio teardown comes from their protocol callbacks above.
         host.runOnMain {
-            cancelPendingTransportDestroy()
+            cancelPendingConnectionDestroy()
             activeLease() ?: return@runOnMain
             val sequence = transportDestroySequence
             val task = Runnable {
@@ -451,6 +453,7 @@ internal class AirPlayPlaybackAdapter(
                 snapshot.duration,
                 snapshot.rate,
                 snapshot.ready,
+                snapshot.playWhenReady,
             )
         }
         host.updatePlayback(
@@ -473,10 +476,25 @@ internal class AirPlayPlaybackAdapter(
     override fun onEnded() {
         val activeLease = activeLease() ?: return
         if (!host.isNetworkPlaybackActive(activeLease)) return
-        host.stopNetworkPlayback(activeLease)
-        mirrorStreamToken = 0L
-        lease = null
-        host.disconnectRemoteImmediately(activeLease)
+        /* AirPlay playlistInsert can arrive immediately after the renderer's
+         * EOS callback. Keep the lease alive long enough for that action to
+         * switch the player to the next prepared item; the task below remains
+         * the terminal-item fallback. */
+        cancelPendingConnectionDestroy()
+        cancelPendingNetworkEnd()
+        val sequence = networkEndSequence
+        val task = Runnable {
+            if (sequence != networkEndSequence) return@Runnable
+            pendingNetworkEnd = null
+            val currentLease = activeLease() ?: return@Runnable
+            if (!host.isNetworkPlaybackActive(currentLease)) return@Runnable
+            host.stopNetworkPlayback(currentLease)
+            mirrorStreamToken = 0L
+            lease = null
+            host.disconnectRemoteImmediately(currentLease)
+        }
+        pendingNetworkEnd = task
+        mainHandler.postDelayed(task, NETWORK_END_CONFIRMATION_MS)
     }
 
     override fun onError(message: String) {
@@ -511,9 +529,20 @@ internal class AirPlayPlaybackAdapter(
     }
 
     private fun cancelPendingTransportDestroy() {
+        cancelPendingConnectionDestroy()
+        cancelPendingNetworkEnd()
+    }
+
+    private fun cancelPendingConnectionDestroy() {
         transportDestroySequence += 1
         pendingTransportDestroy?.let(mainHandler::removeCallbacks)
         pendingTransportDestroy = null
+    }
+
+    private fun cancelPendingNetworkEnd() {
+        networkEndSequence += 1
+        pendingNetworkEnd?.let(mainHandler::removeCallbacks)
+        pendingNetworkEnd = null
     }
 
     private companion object {
@@ -521,5 +550,6 @@ internal class AirPlayPlaybackAdapter(
         const val AUDIO_SAMPLE_RATE = 44_100.0
         const val DEFAULT_MIRROR_ASPECT = 16f / 9f
         const val TRANSPORT_DESTROY_CONFIRMATION_MS = 300L
+        const val NETWORK_END_CONFIRMATION_MS = 1_500L
     }
 }

@@ -26,7 +26,6 @@
 
 #define RAOP_API
 #define MAX_AIRPLAY_VIDEO 10
-#define MIN_STORED_AIRPLAY_VIDEO_DURATION_SECONDS 90   //dont store advertisement playlists
 
 #ifdef __cplusplus
 extern "C" {

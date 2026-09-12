@@ -476,15 +476,14 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
     int fcup_response_statuscode = 0;
     char *type = NULL;
     bool logger_debug = (logger_get_level(raop->logger) >= LOGGER_DEBUG);
-    if (!airplay_video) goto post_action_error;
 
     const char* session_id = http_request_get_header(request, "X-Apple-Session-ID");
     if (!session_id) {
         logger_log(raop->logger, LOGGER_ERR, "Play request had no X-Apple-Session-ID");
         goto post_action_error;
     }    
-    const char *apple_session_id = get_apple_session_id(airplay_video);
-    if (strcmp(session_id, apple_session_id)){
+    const char *apple_session_id = airplay_video ? get_apple_session_id(airplay_video) : NULL;
+    if (airplay_video && (!apple_session_id || strcmp(session_id, apple_session_id))){
         logger_log(raop->logger, LOGGER_ERR, "X-Apple-Session-ID has changed:\n  was:\"%s\"\n  now:\"%s\"",
                    apple_session_id, session_id);
         goto post_action_error;
@@ -534,6 +533,12 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
     if (!PLIST_IS_DICT (req_params_node)) {
         goto post_action_error;
     }
+    /* playlistRemove leaves current_video unset while the renderer is
+       switching items.  playlistInsert can therefore be the first action
+       received with no current slot; the target UUID is validated below. */
+    if (!airplay_video && strcmp(type, "playlistInsert")) {
+        goto post_action_error;
+    }
     if (!strcmp(type,"playlistRemove")) {
         plist_t req_params_item_node = plist_dict_get_item(req_params_node, "item");
         if (!req_params_item_node || !PLIST_IS_DICT (req_params_item_node)) {
@@ -562,23 +567,51 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
             goto post_action_error;
         }
         plist_t req_params_item_uuid_node = plist_dict_get_item(req_params_item_node, "uuid");
-        char* remove_uuid = NULL;
-        plist_get_string_val(req_params_item_uuid_node, &remove_uuid);
-        if (remove_uuid) {
-            int id  =  get_playlist_by_uuid(raop, remove_uuid);
-            if (id >= 0) {
-                logger_log(raop->logger, LOGGER_INFO, "playlistInsert uuid %s is stored at airplay_video[%d]", remove_uuid, id);
-            } else {
-                logger_log(raop->logger, LOGGER_INFO, "playlistInsert uuid %s is not a stored playlist", remove_uuid);
-            }
-            plist_mem_free(remove_uuid);
-            char *plist_xml = NULL;
-            uint32_t plist_len = 0;
-            plist_to_xml(req_params_item_node, &plist_xml, &plist_len);
-            printf("playlistInsert parameter item list is:\n%s", plist_xml);
-            plist_mem_free(plist_xml);
+        char* insert_uuid = NULL;
+        if (!PLIST_IS_STRING(req_params_item_uuid_node)) {
+            logger_log(raop->logger, LOGGER_WARNING,
+                       "playlistInsert item has no valid uuid");
+            goto post_action_error;
         }
-        logger_log(raop->logger, LOGGER_ERR, "FIXME: playlistInsert is not yet implemented");
+        plist_get_string_val(req_params_item_uuid_node, &insert_uuid);
+        if (insert_uuid) {
+            int id  =  get_playlist_by_uuid(raop, insert_uuid);
+            if (id >= 0) {
+                airplay_video_t *inserted_video = raop->airplay_video[id];
+                const char *inserted_session_id = get_apple_session_id(inserted_video);
+                if (!inserted_session_id || strcmp(session_id, inserted_session_id)) {
+                    logger_log(raop->logger, LOGGER_WARNING,
+                               "playlistInsert uuid %s belongs to another AirPlay session",
+                               insert_uuid);
+                    plist_mem_free(insert_uuid);
+                    goto post_action_error;
+                }
+                if (!get_playback_location(inserted_video) ||
+                    !get_initial_fetch_complete(inserted_video)) {
+                    logger_log(raop->logger, LOGGER_WARNING,
+                               "playlistInsert uuid %s is not ready for playback",
+                               insert_uuid);
+                } else {
+                    raop->current_video = id;
+                    set_apple_session_id(inserted_video, session_id, strlen(session_id));
+                    float resume_pos = get_resume_position_seconds(inserted_video);
+                    float start_pos = get_start_position_seconds(inserted_video);
+                    raop->video_play_conn = (void *) conn;
+                    logger_log(raop->logger, LOGGER_INFO,
+                               "playlistInsert uuid %s starts stored airplay_video[%d] at %.3fs",
+                               insert_uuid, id,
+                               resume_pos > start_pos ? resume_pos : start_pos);
+                    raop->callbacks.on_video_play(
+                        raop->callbacks.cls,
+                        get_playback_location(inserted_video),
+                        resume_pos > start_pos ? resume_pos : start_pos);
+                }
+            } else {
+                logger_log(raop->logger, LOGGER_WARNING,
+                           "playlistInsert uuid %s is not a stored playlist", insert_uuid);
+            }
+        }
+        plist_mem_free(insert_uuid);
 
     } else if (!strcmp(type, "unhandledURLResponse")) {   
         /* handling type "unhandledURLResponse" */
@@ -890,21 +923,36 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
         return;
     }
     
-    /* initialize a new playlist (airplay_video structure) */
-    /* first delete any short stored playlists (probably advertisements */
+    /* Keep a bounded playlist cache. Short videos are valid queue items for
+       clients such as Douyin, so duration cannot be used as an advertisement
+       heuristic here. When full, evict a non-current slot. */
     int count = 0;
     for (int i = 0; i < MAX_AIRPLAY_VIDEO; i++) {
         if (raop->airplay_video[i]) {
-            float duration = get_duration(raop->airplay_video[i]); 
-            if (duration < (float) MIN_STORED_AIRPLAY_VIDEO_DURATION_SECONDS ) { //likely to be an advertisement
-                logger_log(raop->logger, LOGGER_INFO,
-                          "deleting playlist playback_uuid %s duration (seconds) %f",
-                           get_playback_uuid(raop->airplay_video[i]), duration);
-                raop_destroy_airplay_video(raop, i);
-            } else {
-                count++;
+            count++;
+        }
+    }
+
+    if (count >= MAX_AIRPLAY_VIDEO) {
+        int evict = -1;
+        int base = raop->current_video >= 0 ? raop->current_video : MAX_AIRPLAY_VIDEO - 1;
+        for (int offset = 1; offset <= MAX_AIRPLAY_VIDEO; offset++) {
+            int candidate = (base + offset) % MAX_AIRPLAY_VIDEO;
+            if (raop->airplay_video[candidate]) {
+                evict = candidate;
+                break;
             }
         }
+        if (evict < 0) {
+            logger_log(raop->logger, LOGGER_ERR,
+                       "playlist cache is full and has no evictable item");
+            goto play_error;
+        }
+        logger_log(raop->logger, LOGGER_INFO,
+                   "evicting bounded playlist cache slot %d uuid %s",
+                   evict, get_playback_uuid(raop->airplay_video[evict]));
+        raop_destroy_airplay_video(raop, evict);
+        count--;
     }
 
     assert (count < MAX_AIRPLAY_VIDEO);
@@ -929,17 +977,6 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
     playback_uuid = NULL;
     count++;
 
-    /* ensure that space will always be available for adding future playlists */
-
-    if (count == MAX_AIRPLAY_VIDEO) {
-        int next = (id + 1) % (int) MAX_AIRPLAY_VIDEO;
-        logger_log(raop->logger, LOGGER_INFO,
-                   "deleting playlist playback_uuid %s duration (seconds) %f",
-                   get_playback_uuid(raop->airplay_video[next]),
-                   get_duration(raop->airplay_video[next]));
-        airplay_video_destroy(raop->airplay_video[next]);
-        raop->airplay_video[next] = NULL;
-    }
 #if 0    
     for (int i = 0; i < MAX_AIRPLAY_VIDEO; i++) {
         printf("new: airplay_video[%d] %p %s %f\n", i, raop->airplay_video[i],

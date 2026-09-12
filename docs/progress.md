@@ -1,5 +1,14 @@
 # 项目进度
 
+## 2026-09-12 AirPlay HLS 短视频连续播放修复（代码完成，待用户主测）
+
+1. 已定位并修复：HLS `playlistInsert` 原先只记录 FIXME，不会切换已缓存队列项；短视频还会因时长小于 90 秒被当作广告清理。现改为保留短视频、限制缓存为 10 条并淘汰非当前项，已完成预取的队列项可复用同一 AirPlay 租约切换播放；`current_video=-1` 的移除后窗口也可处理插入动作，跨会话 UUID 会被拒绝。
+2. 已修复：Media3 播放结束不再立即断开 AirPlay 会话，给发送端 `playlistInsert` 最多 `1500 ms` 的换片窗口；显式 Stop、用户关闭和无下一条超时仍结束当前会话。HLS 控制连接关闭改用 `playWhenReady` 判断显式暂停，避免缓冲 / 换片期间 `rate=0` 被误判为停止。
+3. 已同步 JNI / Kotlin 播放快照契约，Debug 安装脚本改为检查 `.test` 包名；相关架构规则、施工方案和验证矩阵已同步自然结束换片例外与人工验收口径。
+4. 已验证：`git diff --check`、`./scripts/gradlew-jdk17.sh assembleDebug`、`node scripts/bump-release-version.mjs --check` 通过；`testDebugUnitTest` 共 173 条，3 条既有 `IcarThemeColorPaletteTest` 失败，与本轮 AirPlay 变更无关。
+5. 已按授权卸载正式包并用 `./scripts/install-debug-to-device.sh --install-only` 覆盖安装 Debug 到 `S56_HQX / Android SDK 28 / 1920x1080`；当前仅安装 `com.ninepointnine.desktopcast.test`，未启动应用，等待用户用 AirPlay 视频投放连续播放至少 10 条短视频。
+6. 项目就绪检查仍提示架构总纲旧 release 版本未同步，模板快检不适用于已初始化项目；03 APP Guard 仍按登记库的 clean 快照报告工作树 dirty，均未修改无关登记或版本文件。
+
 ## 2026-09-03 staging 测试包版本升级（完成，待用户主测）
 
 1. `release-version.properties` 已递增为 `1.0.3-icar03` / `versionCode=4`，Cloud 03 APP 登记同步为 staging `1.0.3-icar03-test (4)`。
