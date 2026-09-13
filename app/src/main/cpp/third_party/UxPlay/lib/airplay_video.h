@@ -20,7 +20,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include "raop.h"
+
+typedef struct raop_s raop_t;
 #include "logger.h"
 
 
@@ -46,7 +47,9 @@ const char *get_language_code(airplay_video_t *airplay_video);
 void set_language_name(airplay_video_t *airplay_video, const char *language_name, size_t len);
 const char *get_language_name(airplay_video_t *airplay_video);
 
-int get_next_FCUP_RequestID(airplay_video_t *airplay_video);    
+bool match_local_video_uri(airplay_video_t *video, const char *url, const char **relative);
+int prepare_fcup_request(airplay_video_t *video, const char *url);
+bool consume_fcup_response(airplay_video_t *video, int request_id, const char *url);
 void set_next_media_uri_id(airplay_video_t *airplay_video, int id);
 int get_next_media_uri_id(airplay_video_t *airplay_video);
 int get_num_media_uri(airplay_video_t *airplay_video);

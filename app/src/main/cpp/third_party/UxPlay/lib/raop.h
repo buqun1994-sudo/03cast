@@ -112,6 +112,11 @@ struct raop_callbacks_s {
     int   (*video_set_codec)(void *cls, video_codec_t codec);
     /* for HLS video player controls */
     void  (*on_video_play) (void *cls, const char *location, const float start_position);
+    /* Tokenized HLS item callback. The UUID is the sender's stable queue key. */
+    void  (*on_video_play_ex) (void *cls, const char *session_id, const char *playback_uuid,
+                               const char *location, const float start_position);
+    void  (*on_video_remove) (void *cls, const char *session_id, const char *playback_uuid);
+    int   (*on_video_cache_rank) (void *cls, const char *playback_uuid);
     void  (*on_video_scrub) (void *cls, const float position);
     void  (*on_video_rate) (void *cls, const float rate);
     void  (*on_video_stop) (void *cls);

@@ -1,13 +1,21 @@
 # 项目进度
 
-## 2026-09-12 AirPlay HLS 短视频连续播放修复（代码完成，待用户主测）
+## 2026-09-13 统一网络视频队列正式 Release 发布（完成，待真实协议验收）
 
-1. 已定位并修复：HLS `playlistInsert` 原先只记录 FIXME，不会切换已缓存队列项；短视频还会因时长小于 90 秒被当作广告清理。现改为保留短视频、限制缓存为 10 条并淘汰非当前项，已完成预取的队列项可复用同一 AirPlay 租约切换播放；`current_video=-1` 的移除后窗口也可处理插入动作，跨会话 UUID 会被拒绝。
-2. 已修复：Media3 播放结束不再立即断开 AirPlay 会话，给发送端 `playlistInsert` 最多 `1500 ms` 的换片窗口；显式 Stop、用户关闭和无下一条超时仍结束当前会话。HLS 控制连接关闭改用 `playWhenReady` 判断显式暂停，避免缓冲 / 换片期间 `rate=0` 被误判为停止。
-3. 已同步 JNI / Kotlin 播放快照契约，Debug 安装脚本改为检查 `.test` 包名；相关架构规则、施工方案和验证矩阵已同步自然结束换片例外与人工验收口径。
-4. 已验证：`git diff --check`、`./scripts/gradlew-jdk17.sh assembleDebug`、`node scripts/bump-release-version.mjs --check` 通过；`testDebugUnitTest` 共 173 条，3 条既有 `IcarThemeColorPaletteTest` 失败，与本轮 AirPlay 变更无关。
-5. 已按授权卸载正式包并用 `./scripts/install-debug-to-device.sh --install-only` 覆盖安装 Debug 到 `S56_HQX / Android SDK 28 / 1920x1080`；当前仅安装 `com.ninepointnine.desktopcast.test`，未启动应用，等待用户用 AirPlay 视频投放连续播放至少 10 条短视频。
-6. 项目就绪检查仍提示架构总纲旧 release 版本未同步，模板快检不适用于已初始化项目；03 APP Guard 仍按登记库的 clean 快照报告工作树 dirty，均未修改无关登记或版本文件。
+1. `release-version.properties` 已递增为 `1.0.7-icar03` / `versionCode=8`，长期总纲版本引用已同步。
+2. 已构建 production Release APK，并输出为 `/Users/q/Desktop/03系列正式发布包-中文名称-20260830/03投屏-v1.0.7-icar03.apk`（`11700817` 字节，SHA-256 `aaf06e23c307661948cf172488565ffb72fa7b4a3fe4482f8369f6be206cdcb6`）及同目录 ZIP（`4803760` 字节，SHA-256 `a81167e10721e9e5601a7982019e820e3545a9b68465fc8e9c40c347973cfb22`）；ZIP 只有一个同名 APK，解压后字节与外部 APK 完全一致。
+3. Release APK 已核对包名 `com.ninepointnine.desktopcast`、版本 `1.0.7-icar03` / `versionCode=8`、`debuggable=false`、production 证书摘要 `14e4a7cdf1481afdb871487aa830bb0dc28910c0ba681693f11f9f1dd2fd4423` 和 APK Signature Scheme v2。
+4. 本次发布未安装正式包、未部署测试环境、未上线；队列原生检查、相关 DLNA / AirPlay JVM 单测、版本 / Skill / 项目就绪检查和 `git diff --check` 均通过；DLNA / AirPlay 连续短视频仍需在目标车机上完成真实投屏验收。
+
+## 2026-09-12 统一网络视频接收队列与短视频连续播放（代码完成，待用户主测）
+
+1. 已完成统一 `NetworkPlaybackQueue`：DLNA 与 AirPlay 的当前项、历史项、下一项、上一项、准备 / 播放 / 暂停 / 失败状态、三次退避重试（`250 / 750 / 1500 ms`）和自然结束等待（`1500 ms`）共用一条真值主链；Media3 只执行列表投影，不决定顺序。
+2. AirPlay HLS 的 `playlistInsert` 现在会切换已缓存的下一条，`playlistRemove` 会同步队列；短视频不再按时长误删，缓存最多 10 条并淘汰非当前项。每个 HLS 项使用不可复用本地 URI 命名空间，FCUP 请求按请求编号和会话归属，旧项销毁后 URL 不再命中。
+3. DLNA `SetAVTransportURI`、`SetNextAVTransportURI`、`GetMediaInfo` 和 GENA 事件已接入同一队列；同一 DLNA 会话换片复用同一 Media3 播放器。AirPlay / DLNA 的协议名称不进入播放界面，用户只看到准备 / 等待下一条状态。
+4. 播放界面已支持上滑下一条、下滑上一条，仅选择接收端已知队列项；到达边界显示明确提示。相同项 ID 的来源地址、MIME 或起播位置变化会创建新代次，迟到回调不能污染新当前项。
+5. 已同步 JNI / Kotlin 播放快照契约、原生 FCUP 并发锁、当前项移除后的 HLS 空指针防护；相关架构规则、施工方案和验证矩阵已同步队列与人工验收口径。
+6. 已验证：`git diff --check`、`./scripts/test-airplay-queue.sh`、相关 JVM 单测、全量 `testDebugUnitTest`（207 条，其中 3 条既有主题色测试失败）、`:app:compileDebugKotlin`、`:app:externalNativeBuildDebug`、`assembleDebug`、项目就绪检查、Skill 检查和版本检查通过。模板快检与 03 APP 登记快照检查按项目状态单独记录。
+7. 已按授权卸载正式包并用 `./scripts/install-debug-to-device.sh --install-only` 覆盖安装 Debug 到 `S56_HQX / Android SDK 28 / 1920x1080`；当前仅安装 `com.ninepointnine.desktopcast.test`，未启动应用，等待用户分别用 DLNA 与 AirPlay 视频投放连续播放至少 10 条短视频。
 
 ## 2026-09-03 staging 测试包版本升级（完成，待用户主测）
 

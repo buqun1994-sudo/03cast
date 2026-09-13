@@ -19,6 +19,9 @@ interface RaopCallbackHandler {
     fun onDacpId(dacpId: String, activeRemote: String)
     // video (hls), distinct from mirroring and raop audio
     fun onVideoPlay(location: String, startPositionSeconds: Float)
+    fun onVideoItemPlay(sessionId: String, itemId: String, location: String, startPositionSeconds: Float) =
+        onVideoPlay(location, startPositionSeconds)
+    fun onVideoItemRemoved(sessionId: String, itemId: String) = Unit
     fun onVideoScrub(positionSeconds: Float)
     fun onVideoRate(rate: Float)
     fun onVideoStop()

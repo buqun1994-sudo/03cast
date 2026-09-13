@@ -49,13 +49,12 @@ internal class AirPlayPlaybackAdapter(
     private var highestMirrorStreamToken = 0L
     @Volatile private var audioActive = false
     @Volatile private var droppedMirrorFrameCount = 0L
+    private var videoSessionId: String? = null
     private var playing = true
     private var title = ""
     private var detail = ""
     private var transportDestroySequence = 0L
     private var pendingTransportDestroy: Runnable? = null
-    private var networkEndSequence = 0L
-    private var pendingNetworkEnd: Runnable? = null
 
     private val mutableArtwork = MutableStateFlow<Bitmap?>(null)
     val artwork: StateFlow<Bitmap?> = mutableArtwork.asStateFlow()
@@ -137,6 +136,8 @@ internal class AirPlayPlaybackAdapter(
         detail = ""
         dacpController.reset()
         lease = null
+        videoSessionId = null
+        if (nativeHandle != 0L) NativeBridge.nativeUpdateVideoQueue(nativeHandle, "", "")
     }
 
     fun stopAll() {
@@ -278,8 +279,8 @@ internal class AirPlayPlaybackAdapter(
         val preserveAudio = audioActive &&
             host.sessionState.value.content == CastContentKind.AUDIO &&
             activeLease() != null
-        val activeLease = host.beginAirPlayMirrorSession(preserveAudio) ?: return null
-        // beginAirPlayMirrorSession may replace the coordinator generation
+        val activeLease = host.beginAirPlayStreamSession(preserveAudio) ?: return null
+        // beginAirPlayStreamSession may replace the coordinator generation
         // and release the previous adapter output. Reattach the returned
         // lease before any RTP frame can arrive on the native thread.
         videoRenderer.reset()
@@ -332,7 +333,6 @@ internal class AirPlayPlaybackAdapter(
     override fun onConnectionInit() {
         host.runOnMain {
             cancelPendingTransportDestroy()
-            ensureLease()
         }
         Log.i(TAG, "AirPlay transport connection initialized")
     }
@@ -403,16 +403,61 @@ internal class AirPlayPlaybackAdapter(
     }
 
     override fun onVideoPlay(location: String, startPositionSeconds: Float) = host.runOnMain {
+        onVideoItemPlay("", location, location, startPositionSeconds)
+    }
+
+    override fun onVideoItemPlay(
+        sessionId: String,
+        itemId: String,
+        location: String,
+        startPositionSeconds: Float,
+    ) = host.runOnMain {
         cancelPendingTransportDestroy()
-        val activeLease = ensureLease() ?: return@runOnMain
+        val activeLease = if (videoSessionId != null && videoSessionId != sessionId) {
+            host.beginAirPlayStreamSession(preserveAudio = false)?.also { lease = it }
+        } else ensureLease()
+        activeLease ?: return@runOnMain
+        videoSessionId = sessionId
+        val queueItemId = "airplay:${itemId.ifBlank { location }}"
         mirrorActive = false
         mirrorStreamToken = 0L
         audioActive = false
         mutableMirrorAspect.value = DEFAULT_MIRROR_ASPECT
         videoRenderer.reset()
         audioRenderer.stop()
-        host.startNetworkPlayback(activeLease, location, startPositionSeconds, this)
+        if (host.isNetworkPlaybackActive(activeLease) && host.networkQueueState.currentItemId != null) {
+            host.appendNetworkPlayback(
+                lease = activeLease,
+                location = location,
+                itemId = queueItemId,
+                startPositionSeconds = startPositionSeconds,
+                observer = this,
+                title = title,
+                detail = detail,
+            )
+            if (host.networkQueueState.currentItemId != queueItemId) {
+                host.selectNetworkPlayback(activeLease, queueItemId)
+            }
+        } else {
+            host.startNetworkPlayback(activeLease, location, startPositionSeconds, this, itemId = queueItemId)
+        }
         host.showContent(activeLease, CastContentKind.NETWORK_VIDEO, playing = true)
+    }
+
+    override fun onVideoItemRemoved(sessionId: String, itemId: String) = host.runOnMain {
+        if (sessionId != videoSessionId) return@runOnMain
+        val activeLease = activeLease() ?: return@runOnMain
+        host.removeNetworkPlaybackItem(activeLease, "airplay:$itemId")
+    }
+
+    override fun onQueueChanged(state: PlaybackQueueState) {
+        val handle = nativeHandle
+        if (handle == 0L) return
+        val victim = if (state.currentIndex > 0) state.items.firstOrNull() else state.items.lastOrNull { it.id != state.currentItemId }
+        NativeBridge.nativeUpdateVideoQueue(
+            handle, state.currentItemId?.removePrefix("airplay:").orEmpty(),
+            victim?.id?.removePrefix("airplay:").orEmpty(),
+        )
     }
 
     override fun onVideoScrub(positionSeconds: Float) = host.runOnMain {
@@ -435,7 +480,6 @@ internal class AirPlayPlaybackAdapter(
 
     override fun onVideoSessionPoll() = host.runOnMain {
         cancelPendingTransportDestroy()
-        ensureLease()
     }
 
     override fun onLog(msg: String) {
@@ -475,26 +519,9 @@ internal class AirPlayPlaybackAdapter(
 
     override fun onEnded() {
         val activeLease = activeLease() ?: return
-        if (!host.isNetworkPlaybackActive(activeLease)) return
-        /* AirPlay playlistInsert can arrive immediately after the renderer's
-         * EOS callback. Keep the lease alive long enough for that action to
-         * switch the player to the next prepared item; the task below remains
-         * the terminal-item fallback. */
-        cancelPendingConnectionDestroy()
-        cancelPendingNetworkEnd()
-        val sequence = networkEndSequence
-        val task = Runnable {
-            if (sequence != networkEndSequence) return@Runnable
-            pendingNetworkEnd = null
-            val currentLease = activeLease() ?: return@Runnable
-            if (!host.isNetworkPlaybackActive(currentLease)) return@Runnable
-            host.stopNetworkPlayback(currentLease)
-            mirrorStreamToken = 0L
-            lease = null
-            host.disconnectRemoteImmediately(currentLease)
-        }
-        pendingNetworkEnd = task
-        mainHandler.postDelayed(task, NETWORK_END_CONFIRMATION_MS)
+        host.stopNetworkPlayback(activeLease)
+        lease = null
+        host.disconnectRemoteImmediately(activeLease)
     }
 
     override fun onError(message: String) {
@@ -530,7 +557,6 @@ internal class AirPlayPlaybackAdapter(
 
     private fun cancelPendingTransportDestroy() {
         cancelPendingConnectionDestroy()
-        cancelPendingNetworkEnd()
     }
 
     private fun cancelPendingConnectionDestroy() {
@@ -539,17 +565,11 @@ internal class AirPlayPlaybackAdapter(
         pendingTransportDestroy = null
     }
 
-    private fun cancelPendingNetworkEnd() {
-        networkEndSequence += 1
-        pendingNetworkEnd?.let(mainHandler::removeCallbacks)
-        pendingNetworkEnd = null
-    }
 
     private companion object {
         const val TAG = "AirPlayPlaybackAdapter"
         const val AUDIO_SAMPLE_RATE = 44_100.0
         const val DEFAULT_MIRROR_ASPECT = 16f / 9f
         const val TRANSPORT_DESTROY_CONFIRMATION_MS = 300L
-        const val NETWORK_END_CONFIRMATION_MS = 1_500L
     }
 }

@@ -378,6 +378,22 @@ Java_com_ninepointnine_desktopcast_bridge_NativeBridge_nativeUpdatePlaybackInfo(
 
 extern "C"
 JNIEXPORT void JNICALL
+Java_com_ninepointnine_desktopcast_bridge_NativeBridge_nativeUpdateVideoQueue(
+        JNIEnv *env, jobject thiz, jlong handle, jstring currentUuid, jstring evictionUuid) {
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx) return;
+    const char *current = env->GetStringUTFChars(currentUuid, nullptr);
+    const char *eviction = env->GetStringUTFChars(evictionUuid, nullptr);
+    pthread_mutex_lock(&ctx->cb_ctx.playback_info_lock);
+    snprintf(ctx->cb_ctx.video_current_uuid, sizeof(ctx->cb_ctx.video_current_uuid), "%s", current);
+    snprintf(ctx->cb_ctx.video_eviction_uuid, sizeof(ctx->cb_ctx.video_eviction_uuid), "%s", eviction);
+    pthread_mutex_unlock(&ctx->cb_ctx.playback_info_lock);
+    env->ReleaseStringUTFChars(currentUuid, current);
+    env->ReleaseStringUTFChars(evictionUuid, eviction);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
 Java_com_ninepointnine_desktopcast_bridge_NativeBridge_nativeSetDefaultStreamValues(
         JNIEnv *env, jobject thiz, jint sampleRate, jint framesPerBurst) {
     audio_engine_set_default_stream_values(sampleRate, framesPerBurst);

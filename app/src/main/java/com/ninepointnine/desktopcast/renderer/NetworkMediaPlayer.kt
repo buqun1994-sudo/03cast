@@ -188,7 +188,12 @@ data class PlaybackSnapshot(
     val speed: Float = 1f,
     val skipSilence: Boolean = false,
     val buffering: Boolean = false,
+    val playbackId: String? = null,
+    val playable: Boolean = false,
+    val ended: Boolean = false,
 )
+
+internal data class NetworkItemConfiguration(val allowHlsFallback: Boolean, val startPositionMs: Long)
 
 // exoplayer calls stay on the main thread; native only reads the onPlaybackInfo snapshot
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -205,16 +210,17 @@ class NetworkMediaPlayer(private val context: Context) {
     private var pendingSurfaceOutputGeneration: Long? = null
     private var handoffSurfaceHolder: SurfaceHolder? = null
     private var currentLocation: String? = null
-    private var currentStartPositionSeconds = 0f
-    private var currentDeclaredMimeType: String? = null
-    private var allowHlsFallback = false
+    private var currentPlaybackId: String? = null
     private var hlsFallbackAttempted = false
+    private val mimeOverrides = mutableMapOf<String, String>()
 
     var onPlaybackInfo: ((PlaybackSnapshot) -> Unit)? = null
     var onVideoSize: ((width: Int, height: Int, aspect: Float) -> Unit)? = null
     var onTitle: ((String?) -> Unit)? = null
-    var onEnded: (() -> Unit)? = null
-    var onError: ((String) -> Unit)? = null
+    var onMediaItemTransition: ((mediaId: String?) -> Unit)? = null
+    var onSourceReady: ((String) -> Unit)? = null
+    var onEnded: ((String?) -> Unit)? = null
+    var onError: ((String?, String, Boolean) -> Unit)? = null
     var onHasVideo: ((Boolean) -> Unit)? = null
 
     private val _reportTick = object : Runnable {
@@ -227,29 +233,49 @@ class NetworkMediaPlayer(private val context: Context) {
     private val _listener = object : Player.Listener {
         @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-            if (allowHlsFallback && !hlsFallbackAttempted && isUnrecognizedInput(error)) {
+            if ((player?.currentMediaItem?.localConfiguration?.tag as? NetworkItemConfiguration)?.allowHlsFallback == true &&
+                !hlsFallbackAttempted && isUnrecognizedInput(error)
+            ) {
                 hlsFallbackAttempted = true
                 val location = currentLocation
                 if (location != null) {
                     Log.w(TAG, "Progressive probe failed; retrying DLNA media as HLS")
-                    _playInternal(
-                        location = location,
-                        startPositionSeconds = currentStartPositionSeconds,
-                        declaredMimeType = currentDeclaredMimeType,
-                        forcedMimeType = MimeTypes.APPLICATION_M3U8,
-                    )
+                    _retryCurrentWithMime(MimeTypes.APPLICATION_M3U8)
                     return
                 }
             }
             Log.w(TAG, "playback error", error)
-            onError?.invoke(error.message ?: "Playback failed")
+            val retryable = error.errorCode in setOf(
+                androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+                androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+                androidx.media3.common.PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+            ) || generateSequence<Throwable>(error) { it.cause }.any {
+                it is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException &&
+                    (it.responseCode in setOf(408, 429) || it.responseCode in 500..599)
+            }
+            onError?.invoke(player?.currentMediaItem?.mediaId, error.message ?: "Playback failed", retryable)
         }
         override fun onPlaybackStateChanged(state: Int) {
             Log.i(TAG, "Playback state: ${stateName(state)}")
-            if (state == Player.STATE_ENDED) onEnded?.invoke()
+            if (state == Player.STATE_ENDED) onEnded?.invoke(player?.currentMediaItem?.mediaId)
+            _reportPlaybackInfo()
+        }
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            if (mediaItem?.mediaId != player?.currentMediaItem?.mediaId) return
+            currentLocation = mediaItem?.localConfiguration?.uri?.toString()
+            if (currentPlaybackId != mediaItem?.mediaId) hlsFallbackAttempted = false
+            currentPlaybackId = mediaItem?.mediaId
+            Log.i(TAG, "Media item transition: id=${mediaItem?.mediaId} reason=$reason")
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                onMediaItemTransition?.invoke(mediaItem?.mediaId)
+            }
         }
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
-            // duration is usually established here (esp. hls): report so the held /play releases
+            val window = Timeline.Window()
+            for (index in 0 until timeline.windowCount) {
+                timeline.getWindow(index, window)
+                if (!window.isPlaceholder) onSourceReady?.invoke(window.mediaItem.mediaId)
+            }
             _reportPlaybackInfo()
         }
         override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
@@ -284,54 +310,83 @@ class NetworkMediaPlayer(private val context: Context) {
         }
     }
 
-    fun play(
-        location: String,
-        startPositionSeconds: Float,
-        declaredMimeType: String? = null,
-        allowHlsFallback: Boolean = false,
-    ) = runOnMain {
-        currentLocation = location
-        currentStartPositionSeconds = startPositionSeconds
-        currentDeclaredMimeType = declaredMimeType
-        this.allowHlsFallback = allowHlsFallback
-        hlsFallbackAttempted = false
-        _playInternal(location, startPositionSeconds, declaredMimeType)
+    /** Reconcile the receiver's ordered projection without recreating ExoPlayer or its Surface. */
+    internal fun syncPlaylist(mediaItems: List<MediaItem>) {
+        check(Looper.myLooper() == Looper.getMainLooper())
+        val p = ensurePlayer()
+        mediaItems.forEachIndexed { index, desired ->
+            val projected = mimeOverrides[desired.mediaId]?.let { desired.buildUpon().setMimeType(it).build() } ?: desired
+            val existing = (index until p.mediaItemCount).firstOrNull { p.getMediaItemAt(it).mediaId == projected.mediaId }
+            if (existing == null) p.addMediaItem(index, projected)
+            else {
+                if (existing != index) p.moveMediaItem(existing, index)
+                val current = p.getMediaItemAt(index)
+                val currentConfig = current.localConfiguration
+                val desiredConfig = projected.localConfiguration
+                val sourceChanged = currentConfig?.uri != desiredConfig?.uri ||
+                    currentConfig?.mimeType != desiredConfig?.mimeType ||
+                    currentConfig?.tag != desiredConfig?.tag
+                if (sourceChanged || current.mediaMetadata != projected.mediaMetadata) {
+                    // Preserve the desired queue projection exactly. A source
+                    // change is followed by NetworkPlaybackQueue.select when
+                    // it is current; metadata-only changes do not restart it.
+                    p.replaceMediaItem(index, projected)
+                }
+            }
+        }
+        if (p.mediaItemCount > mediaItems.size) p.removeMediaItems(mediaItems.size, p.mediaItemCount)
     }
 
-    private fun _playInternal(
-        location: String,
-        startPositionSeconds: Float,
-        declaredMimeType: String?,
-        forcedMimeType: String? = null,
-    ) {
-        // recycling must not report the stopped sentinel: senders poll right after /play
-        _stopInternal(reportStopped = false)
+    internal fun selectMediaItem(mediaId: String, startPositionMs: Long, playing: Boolean) {
+        val p = player ?: return
+        val index = (0 until p.mediaItemCount).firstOrNull { p.getMediaItemAt(it).mediaId == mediaId } ?: return
+        p.seekTo(index, startPositionMs.coerceAtLeast(0))
+        p.playWhenReady = playing
+        p.prepare()
+        _reportPlaybackInfo()
+        mainHandler.removeCallbacks(_reportTick)
+        mainHandler.postDelayed(_reportTick, REPORT_INTERVAL_MS)
+    }
+
+    internal fun retryCurrent(playing: Boolean) {
+        val p = player ?: return
+        // prepare() alone does nothing during an indefinitely buffering load.
+        val position = p.currentPosition
+        val index = p.currentMediaItemIndex
+        if (index !in 0 until p.mediaItemCount) return
+        p.stop()
+        p.seekTo(index, position)
+        p.playWhenReady = playing
+        p.prepare()
+    }
+
+    private fun _retryCurrentWithMime(mimeType: String) {
+        val p = player ?: return
+        val index = p.currentMediaItemIndex
+        if (index !in 0 until p.mediaItemCount) return
+        val current = p.getMediaItemAt(index)
+        val replacement = current.buildUpon().setMimeType(mimeType).build()
+        mimeOverrides[current.mediaId] = mimeType
+        p.replaceMediaItem(index, replacement)
+        p.seekTo(index, (current.localConfiguration?.tag as? NetworkItemConfiguration)?.startPositionMs ?: 0L)
+        p.prepare()
+    }
+
+    private fun ensurePlayer(): ExoPlayer {
+        player?.let { return it }
         renderersFactory.resetVideoRendererReference()
-        val p = ExoPlayer.Builder(context, renderersFactory)
+        val created = ExoPlayer.Builder(context, renderersFactory)
+            .setUseLazyPreparation(false)
             .setDetachSurfaceTimeoutMs(SURFACE_HANDOFF_TIMEOUT_MS)
             .build()
             .also { it.addListener(_listener) }
-        player = p
+        player = created
         activeVideoRenderer = renderersFactory.videoRenderer
         pendingSurfaceHolder?.let { holder ->
             pendingSurfaceOutputGeneration = activeVideoRenderer?.outputGeneration()
-            p.setVideoSurfaceHolder(holder)
+            created.setVideoSurfaceHolder(holder)
         }
-        val resolvedMimeType = forcedMimeType ?: MediaMimeResolver.resolve(location, declaredMimeType)
-        val mediaItem = MediaItem.Builder()
-            .setUri(location)
-            .apply { resolvedMimeType?.let(::setMimeType) }
-            .build()
-        Log.i(
-            TAG,
-            "Preparing network media: mime=${resolvedMimeType ?: "auto"} " +
-                "location=${location.substringBefore('?').substringBefore('#')}",
-        )
-        p.setMediaItem(mediaItem, (startPositionSeconds * 1000).toLong())
-        p.playWhenReady = true
-        p.prepare()
-        onPlaybackInfo?.invoke(PlaybackSnapshot(startPositionSeconds, 0f, 0f, false, true))
-        mainHandler.postDelayed(_reportTick, REPORT_INTERVAL_MS)
+        return created
     }
 
     fun scrub(positionSeconds: Float) = runOnMain {
@@ -528,6 +583,9 @@ class NetworkMediaPlayer(private val context: Context) {
             it.release()
         }
         player = null
+        currentPlaybackId = null
+        currentLocation = null
+        mimeOverrides.clear()
         activeVideoRenderer = null
         pendingSurfaceOutputGeneration = null
         // duration=-1 is the "video finished" sentinel for the playback-info handler
@@ -556,6 +614,9 @@ class NetworkMediaPlayer(private val context: Context) {
                 speed = p.playbackParameters.speed,
                 skipSilence = p.skipSilenceEnabled,
                 buffering = p.playbackState == Player.STATE_BUFFERING,
+                playbackId = p.currentMediaItem?.mediaId,
+                playable = p.playbackState == Player.STATE_READY,
+                ended = p.playbackState == Player.STATE_ENDED,
             )
         )
     }

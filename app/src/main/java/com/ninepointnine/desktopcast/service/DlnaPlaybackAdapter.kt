@@ -35,9 +35,10 @@ internal class DlnaPlaybackAdapter(
     val image: StateFlow<Bitmap?> = mutableImage.asStateFlow()
 
     override fun setMedia(media: DlnaMedia) = host.runOnMainBlocking {
-        val newLease = host.beginSession(CastProtocol.DLNA) ?: return@runOnMainBlocking
+        val newLease = host.ensureSession(CastProtocol.DLNA) ?: return@runOnMainBlocking
         state = state.copy(
             media = media,
+            nextMedia = null,
             transportState = DlnaTransportState.STOPPED,
             positionMs = 0,
             durationMs = 0,
@@ -45,13 +46,23 @@ internal class DlnaPlaybackAdapter(
         mutableImage.value = null
         lease = newLease
         host.updateMetadata(newLease, media.title, media.creator)
+        if (media.kind == DlnaMediaKind.IMAGE) host.stopNetworkPlayback(newLease)
+        else playMedia(media, newLease, playing = false)
+    }
+
+    override fun setNextMedia(media: DlnaMedia?) = host.runOnMainBlocking {
+        // Images use a different output path and cannot enter a network-media playlist.
+        if (media?.kind == DlnaMediaKind.IMAGE) throw com.ninepointnine.desktopcast.dlna.DlnaControlException(714, "Illegal MIME-type")
+        state = state.copy(nextMedia = media)
+        val activeLease = activeLease() ?: return@runOnMainBlocking
+        host.setNextNetworkPlayback(activeLease, media?.toQueueItem())
     }
 
     override fun play() = host.runOnMainBlocking {
         val media = state.media ?: return@runOnMainBlocking
         val activeLease = host.ensureSession(CastProtocol.DLNA) ?: return@runOnMainBlocking
         lease = activeLease
-        if (host.isNetworkPlaybackActive(activeLease) && state.transportState != DlnaTransportState.STOPPED) {
+        if (host.isNetworkPlaybackActive(activeLease)) {
             state = state.copy(transportState = DlnaTransportState.PLAYING)
             host.setNetworkPlaying(activeLease, true)
             host.updatePlayback(activeLease, state.positionMs, state.durationMs, true)
@@ -121,6 +132,7 @@ internal class DlnaPlaybackAdapter(
             DlnaPlaybackSnapshot(volume = state.volume, muted = state.muted)
         } else {
             state.copy(
+                nextMedia = null,
                 transportState = if (state.media == null) {
                     DlnaTransportState.NO_MEDIA
                 } else {
@@ -135,6 +147,8 @@ internal class DlnaPlaybackAdapter(
     override fun onPlaybackInfo(snapshot: PlaybackSnapshot) {
         val activeLease = activeLease() ?: return
         val transport = when {
+            snapshot.ended -> DlnaTransportState.STOPPED
+            !snapshot.playWhenReady && state.transportState == DlnaTransportState.STOPPED -> DlnaTransportState.STOPPED
             snapshot.buffering -> DlnaTransportState.TRANSITIONING
             snapshot.playWhenReady -> DlnaTransportState.PLAYING
             else -> DlnaTransportState.PAUSED
@@ -150,6 +164,27 @@ internal class DlnaPlaybackAdapter(
     }
 
     override fun onVideoSize(width: Int, height: Int, aspect: Float) = Unit
+
+    override fun onQueueChanged(state: PlaybackQueueState) {
+        val activeLease = activeLease() ?: return
+        val current = state.current ?: return
+        val old = this.state
+        this.state = old.copy(
+            media = current.toDlnaMedia(), nextMedia = state.next?.toDlnaMedia(),
+            transportState = when {
+                state.awaitingNext -> DlnaTransportState.STOPPED
+                current.status == PlaybackQueueItemStatus.PREPARING && state.playWhenReady -> DlnaTransportState.TRANSITIONING
+                current.status == PlaybackQueueItemStatus.PLAYING -> DlnaTransportState.PLAYING
+                current.status == PlaybackQueueItemStatus.PAUSED && old.transportState != DlnaTransportState.STOPPED -> DlnaTransportState.PAUSED
+                else -> old.transportState
+            },
+        )
+        if (old.media != this.state.media) {
+            host.showContent(activeLease, current.content, current.title, current.detail, state.playWhenReady)
+            this.state = this.state.copy(positionMs = 0, durationMs = 0)
+        }
+        if (old != this.state) host.notifyDlnaTransportChanged()
+    }
 
     override fun onTitle(title: String?) {
         val activeLease = activeLease() ?: return
@@ -191,6 +226,7 @@ internal class DlnaPlaybackAdapter(
         media: DlnaMedia,
         activeLease: CastSessionLease,
         startPositionSeconds: Float = 0f,
+        playing: Boolean = true,
     ) {
         host.showContent(
             activeLease,
@@ -201,7 +237,7 @@ internal class DlnaPlaybackAdapter(
             },
             media.title,
             media.creator,
-            playing = true,
+            playing = playing,
         )
         if (media.kind == DlnaMediaKind.IMAGE) {
             host.stopNetworkPlayback(activeLease)
@@ -230,20 +266,42 @@ internal class DlnaPlaybackAdapter(
             )
         } else {
             mutableImage.value = null
+            val pendingNext = state.nextMedia
             host.startNetworkPlayback(
                 lease = activeLease,
                 location = media.uri,
                 startPositionSeconds = startPositionSeconds,
                 observer = this,
+                itemId = media.queueId(),
+                title = media.title,
+                detail = media.creator,
+                metadata = media.metadata,
+                content = if (media.kind == DlnaMediaKind.AUDIO) CastContentKind.AUDIO else CastContentKind.NETWORK_VIDEO,
+                playing = playing,
                 declaredMimeType = media.mimeType,
                 allowHlsFallback = media.kind in setOf(
                     DlnaMediaKind.VIDEO,
                     DlnaMediaKind.UNKNOWN,
                 ),
             )
+            pendingNext?.let { host.setNextNetworkPlayback(activeLease, it.toQueueItem()) }
             applyVolume(activeLease)
         }
     }
+
+    private fun DlnaMedia.queueId(): String = "dlna:${java.util.UUID.nameUUIDFromBytes(uri.toByteArray(Charsets.UTF_8))}"
+
+    private fun DlnaMedia.toQueueItem() = PlaybackQueueItem(
+        id = queueId(), protocol = CastProtocol.DLNA, uri = uri, mimeType = mimeType,
+        title = title, detail = creator, metadata = metadata,
+        content = if (kind == DlnaMediaKind.AUDIO) CastContentKind.AUDIO else CastContentKind.NETWORK_VIDEO,
+        allowHlsFallback = kind in setOf(DlnaMediaKind.VIDEO, DlnaMediaKind.UNKNOWN),
+    )
+
+    private fun PlaybackQueueItem.toDlnaMedia() = DlnaMedia(
+        uri = uri, metadata = metadata, title = title, creator = detail, mimeType = mimeType.orEmpty(),
+        kind = if (content == CastContentKind.AUDIO) DlnaMediaKind.AUDIO else DlnaMediaKind.VIDEO,
+    )
 
     private fun seekInternal(positionMs: Long) {
         val activeLease = activeLease() ?: return

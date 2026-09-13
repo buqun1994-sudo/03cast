@@ -41,8 +41,6 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     memset(ctx->registered_keys, 0, sizeof(ctx->registered_keys));
 
     pthread_mutex_init(&ctx->playback_info_lock, NULL);
-    pthread_cond_init(&ctx->play_ready_cond, NULL);
-    ctx->play_ready = 0;
     ctx->playback_position = 0.0;
     /* -1.0 is the video finished sentinel, reserved for _video_stop */
     ctx->playback_duration = 0.0;
@@ -67,6 +65,8 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->on_progress = (*env)->GetMethodID(env, cls, "onProgress", "(JJJ)V");
     ctx->on_dacp_id = (*env)->GetMethodID(env, cls, "onDacpId", "(Ljava/lang/String;Ljava/lang/String;)V");
     ctx->on_video_play = (*env)->GetMethodID(env, cls, "onVideoPlay", "(Ljava/lang/String;F)V");
+    ctx->on_video_item_play = (*env)->GetMethodID(env, cls, "onVideoItemPlay", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;F)V");
+    ctx->on_video_remove = (*env)->GetMethodID(env, cls, "onVideoItemRemoved", "(Ljava/lang/String;Ljava/lang/String;)V");
     ctx->on_video_scrub = (*env)->GetMethodID(env, cls, "onVideoScrub", "(F)V");
     ctx->on_video_rate = (*env)->GetMethodID(env, cls, "onVideoRate", "(F)V");
     ctx->on_video_stop = (*env)->GetMethodID(env, cls, "onVideoStop", "()V");
@@ -84,7 +84,6 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
         ctx->registered_keys[i] = NULL;
     }
     ctx->registered_count = 0;
-    pthread_cond_destroy(&ctx->play_ready_cond);
     pthread_mutex_destroy(&ctx->playback_info_lock);
 }
 
@@ -97,10 +96,6 @@ void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double 
     ctx->playback_rate = rate;
     ctx->playback_play_when_ready = play_when_ready;
     ctx->playback_ready = ready;
-    if (ready && !ctx->play_ready) {
-        ctx->play_ready = 1;
-        pthread_cond_signal(&ctx->play_ready_cond);
-    }
     pthread_mutex_unlock(&ctx->playback_info_lock);
 }
 
@@ -234,18 +229,8 @@ static void _video_reset(void *cls, reset_type_t t) {
     if (t == RESET_TYPE_HLS_SHUTDOWN || t == RESET_TYPE_HLS_EOS) {
         _video_stop(cls);
     }
-    if (t == RESET_TYPE_HLS_CONN_CLOSED) {
-        /* A closed /play control connection is not authoritative while the
-         * Media3 player still owns a live item.  In particular, effective
-         * rate is 0 during buffering and while a queued short video is being
-         * swapped.  Only an explicit paused state may be treated as abandoned. */
-        pthread_mutex_lock(&ctx->playback_info_lock);
-        int paused = ctx->playback_ready && !ctx->playback_play_when_ready;
-        pthread_mutex_unlock(&ctx->playback_info_lock);
-        if (paused) {
-            _video_stop(cls);
-        }
-    }
+    /* A TCP connection closing is not a media Stop, including while paused.
+       The queue owns natural end, and POST /stop owns explicit termination. */
     if (t == RESET_TYPE_HLS_SHUTDOWN && ctx->raop) {
         raop_remove_hls_connections(ctx->raop);
     }
@@ -335,28 +320,57 @@ static bool _check_register(void *cls, const char *pk_str) {
 
 /* --- AirPlay Video (HLS) playback callbacks --- */
 
-static void _video_play(void *cls, const char *location, const float start_position) {
+static void _video_play_with_uuid(void *cls, const char *session_id, const char *playback_uuid,
+                                  const char *location, const float start_position) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    LOGI("video_play: %s @ %.2fs", location ? location : "(null)", start_position);
-    pthread_mutex_lock(&ctx->playback_info_lock);
-    ctx->play_ready = 0;
-    pthread_mutex_unlock(&ctx->playback_info_lock);
+    LOGI("video_play: item=%s @ %.2fs", playback_uuid ? playback_uuid : "(none)", start_position);
     android_callbacks_update_playback_info(ctx, start_position, 0.0, 0.0f, 0, 1);
     JNIEnv *env = _get_env(ctx);
     if (!env || !location) return;
+    jstring jsession = (*env)->NewStringUTF(env, session_id ? session_id : "");
+    jstring juuid = (*env)->NewStringUTF(env, playback_uuid ? playback_uuid : "");
     jstring jloc = (*env)->NewStringUTF(env, location);
-    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_play, jloc, (jfloat)start_position);
-    (*env)->DeleteLocalRef(env, jloc);
-    /* self-driven senders (macOS) latch their scrubber timeline at /play; hold the response
-       until the player reports ready so that read must carry the real duration */
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += 10; // hold for max 10s
-    pthread_mutex_lock(&ctx->playback_info_lock);
-    while (!ctx->play_ready) {
-        if (pthread_cond_timedwait(&ctx->play_ready_cond, &ctx->playback_info_lock, &ts) == ETIMEDOUT) break;
+    if (ctx->on_video_item_play) {
+        (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_item_play,
+                               jsession, juuid, jloc, (jfloat)start_position);
+    } else if (ctx->on_video_play) {
+        (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_play,
+                               jloc, (jfloat)start_position);
     }
+    (*env)->DeleteLocalRef(env, juuid);
+    (*env)->DeleteLocalRef(env, jloc);
+    (*env)->DeleteLocalRef(env, jsession);
+    /* Return immediately: this same HTTP loop must serve Media3's HLS reads.
+       Playback readiness and duration are published by subsequent info polls. */
+}
+
+static void _video_play(void *cls, const char *location, const float start_position) {
+    _video_play_with_uuid(cls, NULL, NULL, location, start_position);
+}
+
+static void _video_play_ex(void *cls, const char *session_id, const char *playback_uuid,
+                           const char *location, const float start_position) {
+    _video_play_with_uuid(cls, session_id, playback_uuid, location, start_position);
+}
+
+static void _video_remove(void *cls, const char *session_id, const char *playback_uuid) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    JNIEnv *env = _get_env(ctx);
+    if (!env || !playback_uuid) return;
+    jstring jsession = (*env)->NewStringUTF(env, session_id ? session_id : "");
+    jstring juuid = (*env)->NewStringUTF(env, playback_uuid);
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_remove, jsession, juuid);
+    (*env)->DeleteLocalRef(env, jsession);
+    (*env)->DeleteLocalRef(env, juuid);
+}
+
+static int _video_cache_rank(void *cls, const char *uuid) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    pthread_mutex_lock(&ctx->playback_info_lock);
+    int rank = (uuid && !strcmp(uuid, ctx->video_current_uuid)) ? INT32_MAX :
+        ((uuid && !strcmp(uuid, ctx->video_eviction_uuid)) ? 0 : 1);
     pthread_mutex_unlock(&ctx->playback_info_lock);
+    return rank;
 }
 
 static void _video_scrub(void *cls, const float position) {
@@ -448,6 +462,9 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
     cbs->display_pin = _display_pin;
     cbs->video_set_codec = _video_set_codec;
     cbs->on_video_play = _video_play;
+    cbs->on_video_play_ex = _video_play_ex;
+    cbs->on_video_remove = _video_remove;
+    cbs->on_video_cache_rank = _video_cache_rank;
     cbs->on_video_scrub = _video_scrub;
     cbs->on_video_rate = _video_rate;
     cbs->on_video_stop = _video_stop;

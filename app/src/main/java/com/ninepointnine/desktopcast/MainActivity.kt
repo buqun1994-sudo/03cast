@@ -16,6 +16,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.ViewGroup
@@ -426,6 +427,41 @@ open class MainActivity : AppCompatActivity() {
         binding.interactionLayer.setOnClickListener {
             if (controlsVisible) hideControlsNow() else showControls()
         }
+        configureVideoGestures()
+    }
+
+    private fun configureVideoGestures() {
+        var startX = 0f
+        var startY = 0f
+        var singlePointer = false
+        binding.interactionLayer.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = event.x
+                    startY = event.y
+                    singlePointer = true
+                }
+                MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> singlePointer = false
+                MotionEvent.ACTION_UP -> if (singlePointer) {
+                    val dx = kotlin.math.abs(event.x - startX)
+                    val dy = event.y - startY
+                    val threshold = maxOf(120f * resources.displayMetrics.density, view.height * 0.18f)
+                    if (lastState.content == CastContentKind.NETWORK_VIDEO &&
+                        kotlin.math.abs(dy) >= threshold && kotlin.math.abs(dy) > dx * 1.3f
+                    ) {
+                        val moved = if (dy < 0) castService?.nextVideo() else castService?.previousVideo()
+                        if (moved == false) android.widget.Toast.makeText(this,
+                            if (dy < 0) R.string.queue_no_next else R.string.queue_no_previous,
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    } else if (dx < android.view.ViewConfiguration.get(this).scaledTouchSlop &&
+                        kotlin.math.abs(dy) < android.view.ViewConfiguration.get(this).scaledTouchSlop
+                    ) view.performClick()
+                    singlePointer = false
+                }
+            }
+            true
+        }
     }
 
     private fun configureMediaControls() {
@@ -636,6 +672,7 @@ open class MainActivity : AppCompatActivity() {
         collectors = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch { service.sessionState.collect(::renderState) }
+                launch { service.playbackQueueState.collect { renderState(lastState) } }
                 launch { service.drivingState.collect(::renderDrivingState) }
                 launch { service.drivingSafetyAlert.collect(::renderDrivingSafetyAlert) }
                 launch {
@@ -729,14 +766,19 @@ open class MainActivity : AppCompatActivity() {
         binding.audioTitle.text = state.title.ifBlank { getString(R.string.unknown_title) }
         binding.audioSubtitle.text = state.detail
         binding.audioSubtitle.isVisible = state.detail.isNotBlank()
-        binding.protocolLabel.text = protocolName(state.protocol).ifBlank { getString(R.string.app_name) }
+        val queue = castService?.playbackQueueState?.value
+        binding.protocolLabel.text = when {
+            queue?.awaitingNext == true -> getString(R.string.queue_waiting_next)
+            queue?.current?.status == com.ninepointnine.desktopcast.service.PlaybackQueueItemStatus.PREPARING -> getString(R.string.queue_preparing)
+            else -> ""
+        }
         binding.mediaTitle.text = state.title
         binding.mediaTitle.isVisible = state.title.isNotBlank()
 
         val showOverlay = active && !safetyVisible &&
             (controlsVisible || state.content == CastContentKind.AUDIO)
         binding.topControls.isVisible = showOverlay
-        binding.protocolLabel.isVisible = showOverlay
+        binding.protocolLabel.isVisible = showOverlay && binding.protocolLabel.text.isNotEmpty()
         binding.topControls.setBackgroundColor(Color.TRANSPARENT)
 
         val mirrorOrImage = state.content in setOf(CastContentKind.MIRROR, CastContentKind.IMAGE)
@@ -1263,11 +1305,7 @@ open class MainActivity : AppCompatActivity() {
         state.phase in setOf(CastPhase.PLAYING, CastPhase.MIRRORING) &&
             state.content in setOf(CastContentKind.NETWORK_VIDEO, CastContentKind.MIRROR, CastContentKind.IMAGE)
 
-    private fun protocolName(protocol: CastProtocol?): String = when (protocol) {
-        CastProtocol.AIRPLAY -> getString(R.string.cast_protocol_airplay)
-        CastProtocol.DLNA -> getString(R.string.cast_protocol_dlna)
-        null -> ""
-    }
+
 
     private companion object {
         const val CONTROLS_TIMEOUT_MS = 3_000L

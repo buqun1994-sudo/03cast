@@ -24,6 +24,7 @@
 #include <assert.h>
 #include <pthread.h>
 #include <time.h>
+#include <stdatomic.h>
 
 #include "raop.h"
 #include "airplay_video.h"
@@ -61,7 +62,8 @@ struct airplay_video_s {
     char *language_code;
     const char *lang;
     int next_uri;
-    int FCUP_RequestID;
+    struct { int id; char *url; } pending_requests[32];
+    pthread_mutex_t pending_requests_lock;
     float start_position_seconds;
     float resume_position_seconds;
     playback_info_t *playback_info;
@@ -86,8 +88,8 @@ static char *_raw_copy_playlist(const char *s) {
 
 //  initialize airplay_video service.
 airplay_video_t *airplay_video_init(raop_t *raop, unsigned short http_port, const char *lang) {
-    char uri[] = "http://localhost:";
-    char port[6] = { '\0' };
+    static atomic_uint_fast64_t next_route = 0;
+    char local_prefix[100];
     assert(raop);
 
     /* calloc guarantees that the 36-character strings apple_session_id and 
@@ -99,15 +101,11 @@ airplay_video_t *airplay_video_init(raop_t *raop, unsigned short http_port, cons
     }
 
     airplay_video->lang = lang;
-     /* create local_uri_prefix string */
-    snprintf(port, sizeof(port), "%u", http_port);
-    size_t len = strlen(uri) + strlen(port);
-    airplay_video->local_uri_prefix = (char *) calloc (len + 1, sizeof(char));
-    strcat(airplay_video->local_uri_prefix, uri);
-    strcat(airplay_video->local_uri_prefix, port);
-
+    /* Never reuse a URL namespace, even after a slot or sender UUID is reused. */
+    snprintf(local_prefix, sizeof(local_prefix), "http://localhost:%u/hls/%llu", http_port,
+             (unsigned long long) atomic_fetch_add(&next_route, 1) + 1);
+    airplay_video->local_uri_prefix = strdup(local_prefix);
     airplay_video->raop = raop;
-    airplay_video->FCUP_RequestID = 0;
     airplay_video->apple_session_id = NULL;
     airplay_video->start_position_seconds = 0.0f;
     airplay_video->playback_uuid = NULL;
@@ -119,6 +117,7 @@ airplay_video_t *airplay_video_init(raop_t *raop, unsigned short http_port, cons
     airplay_video->master_playlist = NULL;
     airplay_video->num_uri = 0;
     pthread_mutex_init(&airplay_video->media_data_store_lock, NULL);
+    pthread_mutex_init(&airplay_video->pending_requests_lock, NULL);
     airplay_video->next_uri = 0;
     return airplay_video;
 }
@@ -126,6 +125,13 @@ airplay_video_t *airplay_video_init(raop_t *raop, unsigned short http_port, cons
 // destroy the airplay_video service
 void
 airplay_video_destroy(airplay_video_t *airplay_video) {
+    pthread_mutex_lock(&airplay_video->pending_requests_lock);
+    for (int i = 0; i < 32; i++) {
+        free(airplay_video->pending_requests[i].url);
+        airplay_video->pending_requests[i].url = NULL;
+    }
+    pthread_mutex_unlock(&airplay_video->pending_requests_lock);
+    pthread_mutex_destroy(&airplay_video->pending_requests_lock);
     if (airplay_video->apple_session_id) {
         free(airplay_video->apple_session_id);
     }
@@ -161,7 +167,7 @@ airplay_video_destroy(airplay_video_t *airplay_video) {
 }
 
 void set_apple_session_id(airplay_video_t *airplay_video, const char * apple_session_id, size_t len) {
-    assert(apple_session_id && len == 36);
+    assert(apple_session_id && len > 0);
     char *str = (char *) calloc(len + 1, sizeof(char));
     if (!str) {
         printf("Memory allocation failed (str)\n");
@@ -176,7 +182,7 @@ void set_apple_session_id(airplay_video_t *airplay_video, const char * apple_ses
 }
 
 void set_playback_uuid(airplay_video_t *airplay_video, const char *playback_uuid, size_t len) {
-    assert(playback_uuid && len == 36);
+    assert(playback_uuid && len > 0);
     char *str = (char *) calloc(len + 1, sizeof(char));
     if (!str) {
         printf("Memory allocation failed (str)\n");
@@ -188,6 +194,8 @@ void set_playback_uuid(airplay_video_t *airplay_video, const char *playback_uuid
     }
     airplay_video->playback_uuid = str;
     str = NULL;
+
+
 }
 
 void set_uri_prefix(airplay_video_t *airplay_video, const char *uri_prefix, size_t len) {
@@ -305,8 +313,57 @@ char *get_uri_local_prefix(airplay_video_t *airplay_video) {
     return airplay_video->local_uri_prefix;
 }
 
-int get_next_FCUP_RequestID(airplay_video_t *airplay_video) {    
-    return ++(airplay_video->FCUP_RequestID);
+bool match_local_video_uri(airplay_video_t *video, const char *url, const char **relative) {
+    if (!video || !url) return false;
+    const char *scheme = strstr(video->local_uri_prefix, "://");
+    const char *path = scheme ? strchr(scheme + 3, '/') : NULL;
+    if (!path) return false;
+    size_t len = strlen(path);
+    size_t url_len = strlen(url);
+    if (url_len <= len || strncmp(url, path, len) || url[len] != '/') return false;
+    if (relative) *relative = url + len;
+    return true;
+}
+
+int prepare_fcup_request(airplay_video_t *video, const char *url) {
+    static atomic_uint next_request = 0;
+    if (!video || !url) return -1;
+    pthread_mutex_lock(&video->pending_requests_lock);
+    for (int i = 0; i < 32; i++) {
+        if (video->pending_requests[i].url) continue;
+        unsigned int id = atomic_fetch_add(&next_request, 1) + 1;
+        if (id > INT32_MAX) {
+            pthread_mutex_unlock(&video->pending_requests_lock);
+            return -1;
+        }
+        char *copy = strdup(url);
+        if (!copy) {
+            pthread_mutex_unlock(&video->pending_requests_lock);
+            return -1;
+        }
+        video->pending_requests[i].id = (int) id;
+        video->pending_requests[i].url = copy;
+        pthread_mutex_unlock(&video->pending_requests_lock);
+        return (int) id;
+    }
+    pthread_mutex_unlock(&video->pending_requests_lock);
+    return -1;
+}
+
+bool consume_fcup_response(airplay_video_t *video, int request_id, const char *url) {
+    if (!video || !url || request_id <= 0) return false;
+    pthread_mutex_lock(&video->pending_requests_lock);
+    for (int i = 0; i < 32; i++) {
+        if (video->pending_requests[i].url && video->pending_requests[i].id == request_id &&
+            !strcmp(video->pending_requests[i].url, url)) {
+            free(video->pending_requests[i].url);
+            video->pending_requests[i].url = NULL;
+            pthread_mutex_unlock(&video->pending_requests_lock);
+            return true;
+        }
+    }
+    pthread_mutex_unlock(&video->pending_requests_lock);
+    return false;
 }
 
 void  set_next_media_uri_id(airplay_video_t *airplay_video, int num) {
@@ -711,7 +768,9 @@ char * get_media_playlist(airplay_video_t *airplay_video, int *count, float *dur
         return NULL;
     }
     for (int i = 0; i < airplay_video->num_uri; i++) {
-        if (strstr(media_data_store[i].uri, uri)) {
+        const char *remote = media_data_store[i].uri;
+        size_t prefix_len = strlen(airplay_video->uri_prefix);
+        if (!strncmp(remote, airplay_video->uri_prefix, prefix_len) && !strcmp(remote + prefix_len, uri)) {
             media_item_t *item = &media_data_store[media_data_store[i].num];
             char *copy = NULL;
             bool stale = true;

@@ -72,7 +72,7 @@ class GenaEventPublisher(
     private fun body(service: DlnaService, state: DlnaPlaybackSnapshot): String {
         val properties = when (service) {
             DlnaService.AV_TRANSPORT -> {
-                val event = """<Event xmlns="urn:schemas-upnp-org:metadata-1-0/AVT/"><InstanceID val="0"><TransportState val="${state.transportState.wireValue}"/><CurrentTrackURI val="${DlnaXml.escape(state.media?.uri.orEmpty())}"/><CurrentTrackDuration val="${DlnaXml.formatTime(state.durationMs)}"/><RelativeTimePosition val="${DlnaXml.formatTime(state.positionMs)}"/></InstanceID></Event>"""
+                val event = """<Event xmlns="urn:schemas-upnp-org:metadata-1-0/AVT/"><InstanceID val="0"><TransportState val="${state.transportState.wireValue}"/><CurrentTrackURI val="${DlnaXml.escape(state.media?.uri.orEmpty())}"/><AVTransportURI val="${DlnaXml.escape(state.media?.uri.orEmpty())}"/><NextAVTransportURI val="${DlnaXml.escape(state.nextMedia?.uri.orEmpty())}"/><NextAVTransportURIMetaData val="${DlnaXml.escape(state.nextMedia?.metadata.orEmpty())}"/><CurrentTrackDuration val="${DlnaXml.formatTime(state.durationMs)}"/><RelativeTimePosition val="${DlnaXml.formatTime(state.positionMs)}"/></InstanceID></Event>"""
                 "<e:property><LastChange>${DlnaXml.escape(event)}</LastChange></e:property>"
             }
             DlnaService.RENDERING_CONTROL -> {

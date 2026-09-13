@@ -65,6 +65,26 @@ class DlnaSoapDispatcherTest {
     }
 
     @Test
+    fun setNextUriIsExposedThroughMediaInfo() {
+        val player = FakePlayer()
+        val dispatcher = DlnaSoapDispatcher(player)
+        dispatcher.dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("SetAVTransportURI", "<InstanceID>0</InstanceID><CurrentURI>http://host/one.mp4</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>"),
+        )
+        dispatcher.dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("SetNextAVTransportURI", "<InstanceID>0</InstanceID><NextURI>http://host/two.mp4</NextURI><NextURIMetaData></NextURIMetaData>"),
+        )
+        val result = dispatcher.dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("GetMediaInfo", "<InstanceID>0</InstanceID>"),
+        )
+        assertEquals("http://host/two.mp4", player.state.nextMedia?.uri)
+        assertTrue("<NextURI>http://host/two.mp4</NextURI>" in result)
+    }
+
+    @Test
     fun metadataPlaceholderCannotOverrideCurrentUri() {
         val player = FakePlayer()
         val dispatcher = DlnaSoapDispatcher(player)
@@ -113,6 +133,10 @@ class DlnaSoapDispatcherTest {
 
         override fun setMedia(media: DlnaMedia) {
             state = state.copy(media = media, transportState = DlnaTransportState.STOPPED)
+        }
+
+        override fun setNextMedia(media: DlnaMedia?) {
+            state = state.copy(nextMedia = media)
         }
 
         override fun play() {

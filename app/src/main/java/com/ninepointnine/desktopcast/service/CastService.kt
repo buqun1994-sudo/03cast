@@ -107,6 +107,7 @@ class CastService : LifecycleService() {
         }
     }
 
+    internal val playbackQueueState get() = playback.queueState
     val sessionState: StateFlow<CastSessionState> get() = playback.sessionState
     val artwork get() = playback.artwork
     val image get() = playback.image
@@ -252,6 +253,8 @@ class CastService : LifecycleService() {
     fun clearMediaSurface(holder: SurfaceHolder) = playback.clearMediaSurface(holder)
     fun togglePlayback() = playback.togglePlayback()
     fun seekTo(positionMs: Long) = playback.seekToPosition(positionMs)
+    fun nextVideo() = playback.nextVideo()
+    fun previousVideo() = playback.previousVideo()
     fun disconnectCurrentSession() = playback.disconnectCurrentSession()
     fun isDrivingPlaybackGuardEnabled(): Boolean =
         preferences.getBoolean(Prefs.DRIVING_PLAYBACK_GUARD, Prefs.DEF_DRIVING_PLAYBACK_GUARD)

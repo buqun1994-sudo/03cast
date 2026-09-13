@@ -19,24 +19,55 @@
 #include "airplay_video.h"
 #include "fcup_request.h"
 
-static void
-*hls_get_current_video(raop_t *raop) {
+static airplay_video_t *
+hls_get_current_video(raop_t *raop) {
     if (raop->current_video < 0) {
         logger_log(raop->logger, LOGGER_ERR, "hls_get_current_video: failed to identify current_playlist");
         return NULL;
     }
-    assert(raop->airplay_video[raop->current_video]);
-    return (void *) raop->airplay_video[raop->current_video];
+    if (raop->current_video >= MAX_AIRPLAY_VIDEO || !raop->airplay_video[raop->current_video]) {
+        logger_log(raop->logger, LOGGER_ERR, "hls_get_current_video: current playlist slot is empty");
+        return NULL;
+    }
+    return raop->airplay_video[raop->current_video];
+}
+
+/* All generated HLS requests carry an immutable per-allocation namespace. */
+static airplay_video_t *
+hls_get_video_for_url(raop_t *raop, const char *url) {
+    for (int i = 0; i < MAX_AIRPLAY_VIDEO; i++) {
+        if (match_local_video_uri(raop->airplay_video[i], url, NULL)) return raop->airplay_video[i];
+    }
+    return NULL;
+}
+
+static void
+request_video_playlist(raop_conn_t *conn, airplay_video_t *video, const char *url) {
+    int request_id = prepare_fcup_request(video, url);
+    if (request_id > 0) fcup_request(conn, url, get_apple_session_id(video), request_id);
 }
 
 static int
 get_playlist_by_uuid(raop_t *raop, const char *uuid) {
+    if (!raop || !uuid) return -1;
     for (int i = 0 ;i < MAX_AIRPLAY_VIDEO; i++) {
-        if (raop->airplay_video[i] && !strcmp(uuid, get_playback_uuid(raop->airplay_video[i]))) {
+        const char *stored_uuid = raop->airplay_video[i] ? get_playback_uuid(raop->airplay_video[i]) : NULL;
+        if (stored_uuid && !strcmp(uuid, stored_uuid)) {
             return i;
         }
     }
     return -1;
+}
+
+static void
+notify_video_play(raop_t *raop, airplay_video_t *video,
+                  const char *location, float start_position) {
+    const char *uuid = video ? get_playback_uuid(video) : NULL;
+    if (raop->callbacks.on_video_play_ex) {
+        raop->callbacks.on_video_play_ex(raop->callbacks.cls, get_apple_session_id(video), uuid, location, start_position);
+    } else {
+        raop->callbacks.on_video_play(raop->callbacks.cls, location, start_position);
+    }
 }
 
 static void
@@ -179,8 +210,11 @@ http_handler_set_property(raop_conn_t *conn,
         selectedMediaArray contains plist with language choice:
     */
 
-    airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
-    assert(airplay_video);
+    airplay_video_t *airplay_video = hls_get_current_video(raop);
+    if (!airplay_video) {
+        http_response_init(response, "HTTP/1.1", 409, "Conflict");
+        return;
+    }
     if (!strcmp(property, "selectedMediaArray")) {
         /* verify that this request contains a binary plist*/
         char *header_str = NULL;
@@ -468,7 +502,7 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
                     char **response_data, int *response_datalen) {
 
     raop_t *raop = conn->raop;
-    airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
+    airplay_video_t *airplay_video = NULL;
     bool data_is_plist = false;
     plist_t req_root_node = NULL;
     uint64_t uint_val = 0;
@@ -482,12 +516,6 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
         logger_log(raop->logger, LOGGER_ERR, "Play request had no X-Apple-Session-ID");
         goto post_action_error;
     }    
-    const char *apple_session_id = airplay_video ? get_apple_session_id(airplay_video) : NULL;
-    if (airplay_video && (!apple_session_id || strcmp(session_id, apple_session_id))){
-        logger_log(raop->logger, LOGGER_ERR, "X-Apple-Session-ID has changed:\n  was:\"%s\"\n  now:\"%s\"",
-                   apple_session_id, session_id);
-        goto post_action_error;
-    }
 
     /* verify that this request contains a binary plist*/
     char *header_str = NULL;
@@ -533,12 +561,6 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
     if (!PLIST_IS_DICT (req_params_node)) {
         goto post_action_error;
     }
-    /* playlistRemove leaves current_video unset while the renderer is
-       switching items.  playlistInsert can therefore be the first action
-       received with no current slot; the target UUID is validated below. */
-    if (!airplay_video && strcmp(type, "playlistInsert")) {
-        goto post_action_error;
-    }
     if (!strcmp(type,"playlistRemove")) {
         plist_t req_params_item_node = plist_dict_get_item(req_params_node, "item");
         if (!req_params_item_node || !PLIST_IS_DICT (req_params_item_node)) {
@@ -546,17 +568,17 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
         }
         plist_t req_params_item_uuid_node = plist_dict_get_item(req_params_item_node, "uuid");
         char* remove_uuid = NULL;
+        if (!PLIST_IS_STRING(req_params_item_uuid_node)) goto post_action_error;
         plist_get_string_val(req_params_item_uuid_node, &remove_uuid);
-        assert(remove_uuid);
         int id  =  get_playlist_by_uuid(raop, remove_uuid);
-        if (id == raop->current_video) {
-            raop->current_video = -1;
-            float position = raop->callbacks.on_video_playlist_remove(raop->callbacks.cls);
-            /* keep the playlist (until space is needed for another one) in case its playback_uuid is re-requested
-               the video will then be restarted at its previous position */
-            set_resume_position_seconds(airplay_video, position);
-        } else {
-            logger_log(raop->logger, LOGGER_WARNING, "playlistRemove uuid %s does not match current_video\n", remove_uuid);
+        const char *owner_session_id = id >= 0 ? get_apple_session_id(raop->airplay_video[id]) : NULL;
+        if (id >= 0 && owner_session_id && !strcmp(session_id, owner_session_id)) {
+            if (id == raop->current_video) {
+                float position = raop->callbacks.on_video_playlist_remove(raop->callbacks.cls);
+                set_resume_position_seconds(raop->airplay_video[id], position);
+                raop->current_video = -1;
+            }
+            if (raop->callbacks.on_video_remove) raop->callbacks.on_video_remove(raop->callbacks.cls, session_id, remove_uuid);
         }
         plist_mem_free (remove_uuid);
 
@@ -586,8 +608,7 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
                     plist_mem_free(insert_uuid);
                     goto post_action_error;
                 }
-                if (!get_playback_location(inserted_video) ||
-                    !get_initial_fetch_complete(inserted_video)) {
+                if (!get_playback_location(inserted_video)) {
                     logger_log(raop->logger, LOGGER_WARNING,
                                "playlistInsert uuid %s is not ready for playback",
                                insert_uuid);
@@ -601,8 +622,8 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
                                "playlistInsert uuid %s starts stored airplay_video[%d] at %.3fs",
                                insert_uuid, id,
                                resume_pos > start_pos ? resume_pos : start_pos);
-                    raop->callbacks.on_video_play(
-                        raop->callbacks.cls,
+                    notify_video_play(
+                        raop, inserted_video,
                         get_playback_location(inserted_video),
                         resume_pos > start_pos ? resume_pos : start_pos);
                 }
@@ -618,26 +639,15 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
         uint_val = 0;
         int fcup_response_datalen = 0;
 
-        if  (logger_debug) {
-            plist_t req_params_fcup_response_statuscode_node = plist_dict_get_item(req_params_node,
-                                                                      "FCUP_Response_StatusCode");
-            if (req_params_fcup_response_statuscode_node) {
-                plist_get_uint_val(req_params_fcup_response_statuscode_node, &uint_val);
-                fcup_response_statuscode = (int) uint_val;
-                uint_val = 0;
-                logger_log(raop->logger, LOGGER_DEBUG, "FCUP_Response_StatusCode = %d",
-                           fcup_response_statuscode);
-            }
-
-            plist_t req_params_fcup_response_requestid_node = plist_dict_get_item(req_params_node,
-                                                                     "FCUP_Response_RequestID");
-            if (req_params_fcup_response_requestid_node) {
-                plist_get_uint_val(req_params_fcup_response_requestid_node, &uint_val);
-                request_id = (int) uint_val;
-                uint_val = 0;
-                logger_log(raop->logger, LOGGER_DEBUG, "FCUP_Response_RequestID =  %d", request_id);
-            }
-        }
+        plist_t request_node = plist_dict_get_item(req_params_node, "FCUP_Response_RequestID");
+        plist_t status_node = plist_dict_get_item(req_params_node, "FCUP_Response_StatusCode");
+        if (!PLIST_IS_UINT(request_node)) goto post_action_error;
+        plist_get_uint_val(request_node, &uint_val);
+        if (uint_val == 0 || uint_val > INT32_MAX) goto post_action_error;
+        request_id = (int) uint_val;
+        uint_val = 0;
+        if (status_node) plist_get_uint_val(status_node, &uint_val);
+        fcup_response_statuscode = (int) uint_val;
 
         plist_t req_params_fcup_response_url_node = plist_dict_get_item(req_params_node, "FCUP_Response_URL");
         if (!PLIST_IS_STRING(req_params_fcup_response_url_node)) {
@@ -649,7 +659,22 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
             goto post_action_error;
         }
         logger_log(raop->logger, LOGGER_DEBUG, "FCUP_Response_URL =  %s", fcup_response_url);
-	
+
+        /* Only the exact outstanding request may mutate its owning cache entry. */
+        for (int i = 0; i < MAX_AIRPLAY_VIDEO; i++) {
+            airplay_video_t *video = raop->airplay_video[i];
+            const char *owner_session_id = video ? get_apple_session_id(video) : NULL;
+            if (video && owner_session_id && !strcmp(session_id, owner_session_id) &&
+                consume_fcup_response(video, request_id, fcup_response_url)) {
+                airplay_video = video;
+                break;
+            }
+        }
+        if (!airplay_video || (fcup_response_statuscode && fcup_response_statuscode != 200)) {
+            plist_mem_free(fcup_response_url);
+            goto post_action_error;
+        }
+
         plist_t req_params_fcup_response_data_node = plist_dict_get_item(req_params_node, "FCUP_Response_Data");
         if (!PLIST_IS_DATA(req_params_fcup_response_data_node)){
             plist_mem_free(fcup_response_url);
@@ -739,15 +764,12 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t 
         int num_uri = get_num_media_uri(airplay_video);
         int uri_num = get_next_media_uri_id(airplay_video);
         if (uri_num <  num_uri) {
-            fcup_request((void *) conn, get_media_uri_by_num(airplay_video, uri_num),
-                                                             apple_session_id,
-                                                             get_next_FCUP_RequestID(airplay_video));
+            request_video_playlist(conn, airplay_video, get_media_uri_by_num(airplay_video, uri_num));
             set_next_media_uri_id(airplay_video, ++uri_num);
         } else {
             set_initial_fetch_complete(airplay_video);
-            raop->callbacks.on_video_play(raop->callbacks.cls,
-                                                get_playback_location(airplay_video),
-                                                get_start_position_seconds(airplay_video));
+            /* The queue already owns this item; completing source preparation
+               must not submit a second play command or rewind the player. */
         }
 
 
@@ -882,7 +904,10 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
     }
 
     if (!playback_uuid) {
-        playback_uuid = strdup(apple_session_id);
+        static unsigned long long anonymous_item = 0;
+        char generated_uuid[37];
+        snprintf(generated_uuid, sizeof(generated_uuid), "00000000-0000-0000-0000-%012llx", ++anonymous_item);
+        playback_uuid = strdup(generated_uuid);
     }
 
 #if 0
@@ -897,6 +922,16 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
 
     id = get_playlist_by_uuid(raop, playback_uuid);
 
+    if (id >= 0 && (!get_apple_session_id(raop->airplay_video[id]) ||
+                    strcmp(apple_session_id, get_apple_session_id(raop->airplay_video[id])))) {
+        goto play_error;
+    }
+    if (id >= 0 && !get_uri_prefix(raop->airplay_video[id]) &&
+        get_playback_location(raop->airplay_video[id]) &&
+        strcmp(playback_location, get_playback_location(raop->airplay_video[id]))) {
+        raop_destroy_airplay_video(raop, id);
+        id = -1;
+    }
     if (id >= 0 && !get_playback_location(raop->airplay_video[id])) {
         raop_destroy_airplay_video(raop, id);
         id = -1;
@@ -917,9 +952,10 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
         float resume_pos = get_resume_position_seconds(airplay_video);
         float start_pos = get_start_position_seconds(airplay_video);
 	//printf("========= %f ============call on_video_play===== %f ==========\n", start_pos, resume_pos);
-        raop->callbacks.on_video_play(raop->callbacks.cls,
-                                      get_playback_location(airplay_video),
-                                      resume_pos > start_pos ? resume_pos : start_pos);
+        notify_video_play(
+            raop, airplay_video,
+            get_playback_location(airplay_video),
+            resume_pos > start_pos ? resume_pos : start_pos);
         return;
     }
     
@@ -935,13 +971,14 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
 
     if (count >= MAX_AIRPLAY_VIDEO) {
         int evict = -1;
-        int base = raop->current_video >= 0 ? raop->current_video : MAX_AIRPLAY_VIDEO - 1;
-        for (int offset = 1; offset <= MAX_AIRPLAY_VIDEO; offset++) {
-            int candidate = (base + offset) % MAX_AIRPLAY_VIDEO;
-            if (raop->airplay_video[candidate]) {
-                evict = candidate;
-                break;
-            }
+        int best_rank = INT32_MAX;
+        for (int candidate = 0; candidate < MAX_AIRPLAY_VIDEO; candidate++) {
+            if (!raop->airplay_video[candidate]) continue;
+            const char *uuid = get_playback_uuid(raop->airplay_video[candidate]);
+            int rank = raop->callbacks.on_video_cache_rank ?
+                raop->callbacks.on_video_cache_rank(raop->callbacks.cls, uuid) :
+                (candidate == raop->current_video ? INT32_MAX : candidate);
+            if (rank < best_rank) { evict = candidate; best_rank = rank; }
         }
         if (evict < 0) {
             logger_log(raop->logger, LOGGER_ERR,
@@ -951,6 +988,9 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
         logger_log(raop->logger, LOGGER_INFO,
                    "evicting bounded playlist cache slot %d uuid %s",
                    evict, get_playback_uuid(raop->airplay_video[evict]));
+        if (raop->callbacks.on_video_remove) raop->callbacks.on_video_remove(
+            raop->callbacks.cls, get_apple_session_id(raop->airplay_video[evict]),
+            get_playback_uuid(raop->airplay_video[evict]));
         raop_destroy_airplay_video(raop, evict);
         count--;
     }
@@ -1001,7 +1041,7 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
         set_playback_location(airplay_video, location, strlen(location));
         free(location);
         char *uri_prefix = (char *) calloc(strlen(playback_location) + 1, sizeof(char));
-        if (!playback_location) {
+        if (!uri_prefix) {
             printf("Memeory allocation failed (playback_location)\n");
             exit(1);
         }
@@ -1011,13 +1051,15 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
         set_uri_prefix(airplay_video, uri_prefix, strlen(uri_prefix));
         free (uri_prefix);
         set_next_media_uri_id(airplay_video, 0);
-        fcup_request((void *) conn, playback_location, apple_session_id, get_next_FCUP_RequestID(airplay_video));
+        request_video_playlist(conn, airplay_video, playback_location);
+        notify_video_play(raop, airplay_video, get_playback_location(airplay_video), start_position_seconds);
     } else if (!strncmp(playback_location, "http://", strlen("http://")) ||
                !strncmp(playback_location, "https://", strlen("https://"))) {
         set_playback_location(airplay_video, playback_location, strlen(playback_location));
-        raop->callbacks.on_video_play(raop->callbacks.cls,
-                                      get_playback_location(airplay_video),
-                                      start_position_seconds);
+        set_initial_fetch_complete(airplay_video);
+        notify_video_play(raop, airplay_video,
+                          get_playback_location(airplay_video),
+                          start_position_seconds);
     } else {
         logger_log(raop->logger, LOGGER_ERR, "Content-Location has unsupported form:\n%s\n", playback_location);
         goto play_error;
@@ -1057,14 +1099,20 @@ static void
 http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *response,
                  char **response_data, int *response_datalen) {
     raop_t *raop = conn->raop;
-    if (raop->current_video == -1) {
-        logger_log(raop->logger, LOGGER_ERR,"airplay_video playlist  not found");
+    const char *method = http_request_get_method(request);
+    if (strcmp(method, "GET")) {
+        http_response_init(response, "HTTP/1.1", 405, "Method Not Allowed");
+        return;
+    }
+    const char *url = http_request_get_url(request);
+    airplay_video_t *airplay_video = hls_get_video_for_url(raop, url);
+    if (!airplay_video) {
+        logger_log(raop->logger, LOGGER_ERR,"airplay_video playlist not found for %s", url);
         http_response_init(response, "HTTP/1.1", 404, "Not Found");
         return;
     }
-    const char *method = http_request_get_method(request);
-    assert (!strcmp(method, "GET"));
-    const char *url = http_request_get_url(request);    
+    const char *relative_url = NULL;
+    match_local_video_uri(airplay_video, url, &relative_url);
     const char* upgrade = http_request_get_header(request, "Upgrade");
     if (upgrade) {
         //don't accept Upgrade: h2c request ?
@@ -1075,9 +1123,8 @@ http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *r
         free (header_str);
         return;
     }
-    airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
-    assert(airplay_video);
-    if (!strcmp(url, "/master.m3u8")){
+    if (!strncmp(relative_url, "/master.m3u8", strlen("/master.m3u8")) &&
+        (relative_url[strlen("/master.m3u8")] == '\0' || relative_url[strlen("/master.m3u8")] == '?')){
         char * master_playlist  = get_master_playlist(airplay_video);
         if (master_playlist) {
             size_t len = strlen(master_playlist);
@@ -1100,7 +1147,7 @@ http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *r
         float duration = 0.0f;
         bool should_fetch = false;
         const char *remote_uri = NULL;
-        char *media_playlist = get_media_playlist(airplay_video, &chunks, &duration, url, &should_fetch, &remote_uri);
+        char *media_playlist = get_media_playlist(airplay_video, &chunks, &duration, relative_url, &should_fetch, &remote_uri);
         if (media_playlist) {
             char *data  = adjust_yt_condensed_playlist(media_playlist);
             free(media_playlist);
@@ -1112,8 +1159,7 @@ http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *r
             logger_log(raop->logger, LOGGER_ERR,"requested media playlist %s not found", url); 
         }
         if (should_fetch) {
-            fcup_request((void *) conn, remote_uri, get_apple_session_id(airplay_video),
-                         get_next_FCUP_RequestID(airplay_video));
+            request_video_playlist(conn, airplay_video, remote_uri);
         }
 
     }
@@ -1126,6 +1172,11 @@ http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *r
     if (*response_datalen > 0) {
         http_response_add_header(response, "Content-Type", "application/x-mpegURL; charset=utf-8");
     } else if (*response_datalen == 0) {
-        http_response_init(response, "HTTP/1.1", 404, "Not Found");
+        if (!get_initial_fetch_complete(airplay_video)) {
+            http_response_init(response, "HTTP/1.1", 503, "Service Unavailable");
+            http_response_add_header(response, "Retry-After", "1");
+        } else {
+            http_response_init(response, "HTTP/1.1", 404, "Not Found");
+        }
     }
 }

@@ -22,7 +22,17 @@ class DlnaSoapDispatcher(
                 controller.setMedia(DlnaXml.parseMedia(uri, request.arguments["CurrentURIMetaData"].orEmpty()))
                 response(DlnaService.AV_TRANSPORT, request.name)
             }
-            "SetNextAVTransportURI" -> response(DlnaService.AV_TRANSPORT, request.name)
+            "SetNextAVTransportURI" -> {
+                val uri = request.required("NextURI")
+                if (uri.isBlank()) {
+                    controller.setNextMedia(null)
+                } else {
+                    controller.setNextMedia(
+                        DlnaXml.parseMedia(uri, request.arguments["NextURIMetaData"].orEmpty()),
+                    )
+                }
+                response(DlnaService.AV_TRANSPORT, request.name)
+            }
             "Play" -> {
                 if (snapshot.media == null) throw DlnaControlException(701, "Transition not available")
                 controller.play()
@@ -68,7 +78,8 @@ class DlnaSoapDispatcher(
                     "<MediaDuration>${DlnaXml.formatTime(snapshot.durationMs)}</MediaDuration>" +
                     "<CurrentURI>${DlnaXml.escape(snapshot.media?.uri.orEmpty())}</CurrentURI>" +
                     "<CurrentURIMetaData>${DlnaXml.escape(snapshot.media?.metadata.orEmpty())}</CurrentURIMetaData>" +
-                    "<NextURI></NextURI><NextURIMetaData></NextURIMetaData>" +
+                    "<NextURI>${DlnaXml.escape(snapshot.nextMedia?.uri.orEmpty())}</NextURI>" +
+                    "<NextURIMetaData>${DlnaXml.escape(snapshot.nextMedia?.metadata.orEmpty())}</NextURIMetaData>" +
                     "<PlayMedium>NETWORK</PlayMedium><RecordMedium>NOT_IMPLEMENTED</RecordMedium>" +
                     "<WriteStatus>NOT_IMPLEMENTED</WriteStatus>",
             )

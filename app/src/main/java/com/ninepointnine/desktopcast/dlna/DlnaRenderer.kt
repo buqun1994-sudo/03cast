@@ -184,7 +184,7 @@ class DlnaRenderer(
             val response = soap.dispatch(service, request.bodyUtf8())
             writeResponse(output, 200, "OK", XML_CONTENT_TYPE, response)
             when (action) {
-                "SetAVTransportURI", "Play", "Pause", "Stop", "Seek" -> publishTransportChanged()
+                "SetAVTransportURI", "SetNextAVTransportURI", "Play", "Pause", "Stop", "Seek" -> publishTransportChanged()
                 "SetVolume", "SetMute" -> publishRenderingChanged()
             }
         } catch (error: DlnaControlException) {

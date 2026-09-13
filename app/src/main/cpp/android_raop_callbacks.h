@@ -30,6 +30,8 @@ typedef struct {
     jmethodID on_progress;
     jmethodID on_dacp_id;
     jmethodID on_video_play;
+    jmethodID on_video_item_play;
+    jmethodID on_video_remove;
     jmethodID on_video_scrub;
     jmethodID on_video_rate;
     jmethodID on_video_stop;
@@ -45,10 +47,8 @@ typedef struct {
     float playback_rate;
     int playback_play_when_ready;
     int playback_ready;
-    /* holds the /play response until the player is ready, so self-driven senders (macOS)
-       establish their timeline after the real duration is known, not at duration 0 */
-    pthread_cond_t play_ready_cond;
-    int play_ready;
+    char video_current_uuid[128];
+    char video_eviction_uuid[128];
     AudioEngine *audio_engine;
 } android_callback_ctx_t;
 

@@ -42,6 +42,7 @@ data class DlnaMedia(
 
 data class DlnaPlaybackSnapshot(
     val media: DlnaMedia? = null,
+    val nextMedia: DlnaMedia? = null,
     val transportState: DlnaTransportState = DlnaTransportState.NO_MEDIA,
     val positionMs: Long = 0,
     val durationMs: Long = 0,
@@ -51,6 +52,7 @@ data class DlnaPlaybackSnapshot(
 
 interface DlnaPlaybackController {
     fun setMedia(media: DlnaMedia)
+    fun setNextMedia(media: DlnaMedia?) = Unit
     fun play()
     fun pause()
     fun stop()

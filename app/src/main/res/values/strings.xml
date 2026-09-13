@@ -138,4 +138,8 @@
     <string name="cast_commercial_buy_pro">获取Pro</string>
     <string name="cast_commercial_view_entitlement">查看权益</string>
     <string name="cast_commercial_retry">重新确认</string>
+    <string name="queue_no_next">手机尚未提供下一条视频</string>
+    <string name="queue_no_previous">没有可返回的上一条视频</string>
+    <string name="queue_waiting_next">等待下一条视频…</string>
+    <string name="queue_preparing">正在准备视频…</string>
 </resources>

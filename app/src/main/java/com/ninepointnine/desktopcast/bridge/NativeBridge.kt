@@ -35,6 +35,8 @@ object NativeBridge {
         playWhenReady: Boolean,
     )
 
+    external fun nativeUpdateVideoQueue(handle: Long, currentUuid: String, evictionUuid: String)
+
     external fun nativeGetRaopTxtRecords(handle: Long): Map<String, String>?
     external fun nativeGetAirplayTxtRecords(handle: Long): Map<String, String>?
     external fun nativeGetRaopServiceName(handle: Long): String?

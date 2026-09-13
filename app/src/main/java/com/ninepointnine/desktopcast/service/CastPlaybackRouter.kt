@@ -5,6 +5,10 @@ import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.view.SurfaceHolder
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import com.ninepointnine.desktopcast.renderer.MediaMimeResolver
+import com.ninepointnine.desktopcast.renderer.NetworkItemConfiguration
 import androidx.media3.common.Player
 import com.ninepointnine.desktopcast.bridge.RaopCallbackHandler
 import com.ninepointnine.desktopcast.dlna.DlnaPlaybackController
@@ -56,11 +60,50 @@ class CastPlaybackRouter internal constructor(
     private val airPlayAdapter = AirPlayPlaybackAdapter(appContext, audioManager, this)
     private val drivingPlaybackInterlock = DrivingPlaybackInterlock()
     private var networkSession: NetworkPlaybackSession? = null
+    private val mutableQueueState = MutableStateFlow(PlaybackQueueState())
+    internal val queueState = mutableQueueState.asStateFlow()
+    private val networkQueue = NetworkPlaybackQueue(
+        player = object : PlaybackQueuePlayer {
+            override fun sync(items: List<PlaybackQueueItem>) {
+                networkPlayer.syncPlaylist(items.map { item ->
+                    MediaItem.Builder().setMediaId(item.playbackId).setUri(item.uri)
+                        .setMimeType(MediaMimeResolver.resolve(item.uri, item.mimeType))
+                        .setTag(NetworkItemConfiguration(item.allowHlsFallback, (item.startPositionSeconds * 1000).toLong()))
+                        .setMediaMetadata(MediaMetadata.Builder().setTitle(item.title).setArtist(item.detail).build())
+                        .build()
+                })
+            }
+            override fun select(item: PlaybackQueueItem, playing: Boolean) =
+                networkPlayer.selectMediaItem(item.playbackId, (item.startPositionSeconds * 1000).toLong(), playing)
+            override fun retry(playing: Boolean) = networkPlayer.retryCurrent(playing)
+        },
+        scheduler = QueueScheduler { delay, action ->
+            val task = Runnable(action)
+            mainHandler.postDelayed(task, delay)
+            QueueCancellation { mainHandler.removeCallbacks(task) }
+        },
+        onStateChanged = { state ->
+            if (mutableQueueState.value != state) {
+                if (mutableQueueState.value.current?.playbackId != state.current?.playbackId ||
+                    mutableQueueState.value.current?.status != state.current?.status ||
+                    mutableQueueState.value.items.size != state.items.size ||
+                    mutableQueueState.value.awaitingNext != state.awaitingNext
+                ) android.util.Log.i("PlaybackQueue", "revision=${state.revision} protocol=${state.current?.protocol} " +
+                    "item=${state.current?.playbackId} state=${state.current?.status} count=${state.items.size} " +
+                    "retry=${state.current?.retryCount} awaitingNext=${state.awaitingNext}")
+                mutableQueueState.value = state
+                withActiveNetworkObserver { it.onQueueChanged(state) }
+            }
+        },
+        onQueueEnded = { withActiveNetworkObserver { it.onEnded() } },
+        onQueueFailed = { message -> withActiveNetworkObserver { it.onError(message) } },
+    )
     private var sessionEndSequence = 0L
 
     private val mutableMediaAspect = MutableStateFlow(16f / 9f)
     private val mutableSessionEndEvent = MutableStateFlow<CastSessionEndEvent?>(null)
     val mediaAspect: StateFlow<Float> = mutableMediaAspect.asStateFlow()
+    internal val networkQueueState: PlaybackQueueState get() = networkQueue.state
     val artwork get() = airPlayAdapter.artwork
     val image get() = dlnaAdapter.image
     val mirrorAspect get() = airPlayAdapter.mirrorAspect
@@ -178,6 +221,16 @@ class CastPlaybackRouter internal constructor(
         }
     }
 
+    fun nextVideo(): Boolean = moveVideo(+1)
+    fun previousVideo(): Boolean = moveVideo(-1)
+
+    private fun moveVideo(direction: Int): Boolean {
+        checkOnMainThread()
+        val session = networkSession ?: return false
+        if (!isCurrent(session.lease) || sessionState.value.content != CastContentKind.NETWORK_VIDEO) return false
+        return if (direction > 0) networkQueue.next() else networkQueue.previous()
+    }
+
     fun dlnaSnapshot(): DlnaPlaybackSnapshot = dlnaAdapter.snapshot()
 
     /** Ends only the active sender session while keeping both receiver listeners available. */
@@ -270,7 +323,7 @@ class CastPlaybackRouter internal constructor(
      * native connection) cannot be used when the previous owner is also
      * AirPlay.
      */
-    internal fun beginAirPlayMirrorSession(preserveAudio: Boolean): CastSessionLease? {
+    internal fun beginAirPlayStreamSession(preserveAudio: Boolean): CastSessionLease? {
         checkOnMainThread()
         if (!commercialAccess.hasCurrentAccess()) {
             commercialAccess.onMediaAttemptDenied()
@@ -369,14 +422,99 @@ class CastPlaybackRouter internal constructor(
         observer: NetworkPlaybackObserver,
         declaredMimeType: String? = null,
         allowHlsFallback: Boolean = false,
+        itemId: String,
+        title: String = "",
+        detail: String = "",
+        metadata: String = "",
+        content: CastContentKind = CastContentKind.NETWORK_VIDEO,
+        playing: Boolean = true,
     ) {
         checkOnMainThread()
         if (!isCurrent(lease)) return
-        stopNetworkPlayback()
+        if (networkSession?.lease != lease) {
+            networkSession = null
+            networkQueue.clear()
+            mutableMediaAspect.value = 16f / 9f
+        }
         networkSession = NetworkPlaybackSession(lease, observer)
-        mutableMediaAspect.value = 16f / 9f
-        networkPlayer.play(location, startPositionSeconds, declaredMimeType, allowHlsFallback)
+        networkQueue.load(PlaybackQueueItem(
+            id = itemId, protocol = lease.protocol, uri = location,
+            startPositionSeconds = startPositionSeconds, mimeType = declaredMimeType,
+            title = title, detail = detail, metadata = metadata, content = content,
+            allowHlsFallback = allowHlsFallback,
+        ), playing)
     }
+
+    internal fun setNextNetworkPlayback(lease: CastSessionLease, item: PlaybackQueueItem?) {
+        checkOnMainThread()
+        if (!isNetworkPlaybackActive(lease)) return
+        networkQueue.setNext(item)
+    }
+
+    /** Adds an item to the current sender queue without replacing its player. */
+    internal fun appendNetworkPlayback(
+        lease: CastSessionLease,
+        location: String,
+        startPositionSeconds: Float,
+        observer: NetworkPlaybackObserver,
+        itemId: String,
+        title: String = "",
+        detail: String = "",
+        metadata: String = "",
+        content: CastContentKind = CastContentKind.NETWORK_VIDEO,
+        declaredMimeType: String? = null,
+        allowHlsFallback: Boolean = false,
+    ) {
+        checkOnMainThread()
+        if (!isCurrent(lease)) return
+        if (networkSession?.lease != lease) {
+            startNetworkPlayback(
+                lease = lease,
+                location = location,
+                startPositionSeconds = startPositionSeconds,
+                observer = observer,
+                declaredMimeType = declaredMimeType,
+                allowHlsFallback = allowHlsFallback,
+                itemId = itemId,
+                title = title,
+                detail = detail,
+                metadata = metadata,
+                content = content,
+                playing = false,
+            )
+            return
+        }
+        networkSession = NetworkPlaybackSession(lease, observer)
+        networkQueue.append(
+            PlaybackQueueItem(
+                id = itemId,
+                protocol = lease.protocol,
+                uri = location,
+                startPositionSeconds = startPositionSeconds,
+                mimeType = declaredMimeType,
+                title = title,
+                detail = detail,
+                metadata = metadata,
+                content = content,
+                allowHlsFallback = allowHlsFallback,
+            ),
+        )
+    }
+
+    internal fun selectNetworkPlayback(lease: CastSessionLease, itemId: String): Boolean {
+        checkOnMainThread()
+        if (!isCurrent(lease) || networkSession?.lease != lease) return false
+        return networkQueue.select(itemId)
+    }
+
+    internal fun removeNetworkPlaybackItem(lease: CastSessionLease, itemId: String) {
+        checkOnMainThread()
+        if (!isCurrent(lease) || networkSession?.lease != lease) return
+        networkQueue.remove(itemId)
+    }
+
+    internal fun hasNetworkPlaybackItem(itemId: String): Boolean =
+        networkQueue.state.items.any { it.id == itemId }
 
     internal fun stopNetworkPlayback(lease: CastSessionLease) {
         checkOnMainThread()
@@ -394,12 +532,22 @@ class CastPlaybackRouter internal constructor(
 
     internal fun setNetworkRate(lease: CastSessionLease, rate: Float) {
         checkOnMainThread()
-        if (isNetworkPlaybackActive(lease)) networkPlayer.setRate(rate)
+        if (isNetworkPlaybackActive(lease)) {
+            networkQueue.setPlaying(rate > 0)
+            networkPlayer.setRate(rate)
+        }
     }
 
     internal fun setNetworkPlaying(lease: CastSessionLease, playing: Boolean) {
         checkOnMainThread()
-        if (isNetworkPlaybackActive(lease)) networkPlayer.setPlaying(playing)
+        if (isNetworkPlaybackActive(lease)) {
+            if (playing && networkQueue.state.awaitingNext) {
+                networkQueue.state.currentItemId?.let(networkQueue::select)
+            } else {
+                networkQueue.setPlaying(playing)
+                networkPlayer.setPlaying(playing)
+            }
+        }
     }
 
     internal fun setNetworkVolume(lease: CastSessionLease, volume: Float) {
@@ -452,7 +600,14 @@ class CastPlaybackRouter internal constructor(
 
     private fun configureNetworkPlayer() {
         networkPlayer.onPlaybackInfo = { snapshot ->
-            runOnMain { withActiveNetworkObserver { it.onPlaybackInfo(snapshot) } }
+            runOnMain {
+                withActiveNetworkObserver {
+                    if (networkQueue.state.current?.playbackId == snapshot.playbackId) {
+                        networkQueue.onPlayerStatus(snapshot.playbackId, snapshot.playable, snapshot.buffering, snapshot.playWhenReady)
+                        it.onPlaybackInfo(snapshot)
+                    }
+                }
+            }
         }
         networkPlayer.onVideoSize = { width, height, aspect ->
             runOnMain {
@@ -463,14 +618,18 @@ class CastPlaybackRouter internal constructor(
         networkPlayer.onTitle = { title ->
             runOnMain { withActiveNetworkObserver { it.onTitle(title) } }
         }
+        networkPlayer.onMediaItemTransition = { itemId ->
+            runOnMain {
+                withActiveNetworkObserver { networkQueue.onPlayerTransition(itemId) }
+            }
+        }
         networkPlayer.onHasVideo = { hasVideo ->
             runOnMain { withActiveNetworkObserver { it.onHasVideo(hasVideo) } }
         }
-        networkPlayer.onEnded = {
-            runOnMain { withActiveNetworkObserver(NetworkPlaybackObserver::onEnded) }
-        }
-        networkPlayer.onError = { message ->
-            runOnMain { withActiveNetworkObserver { it.onError(message) } }
+        networkPlayer.onSourceReady = { itemId -> withActiveNetworkObserver { networkQueue.onSourceReady(itemId) } }
+        networkPlayer.onEnded = { itemId -> withActiveNetworkObserver { networkQueue.onPlayerEnded(itemId) } }
+        networkPlayer.onError = { itemId, message, retryable ->
+            withActiveNetworkObserver { networkQueue.onPlayerError(itemId, message, retryable) }
         }
     }
 
@@ -524,6 +683,7 @@ class CastPlaybackRouter internal constructor(
     private fun stopNetworkPlayback() {
         checkOnMainThread()
         networkSession = null
+        networkQueue.clear()
         networkPlayer.stop()
     }
 
@@ -554,6 +714,7 @@ internal interface NetworkPlaybackObserver {
     fun onVideoSize(width: Int, height: Int, aspect: Float)
     fun onTitle(title: String?)
     fun onHasVideo(hasVideo: Boolean)
+    fun onQueueChanged(state: PlaybackQueueState) = Unit
     fun onEnded()
     fun onError(message: String)
 }
