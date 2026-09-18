@@ -1,6 +1,7 @@
 package com.ninepointnine.desktopcast.service
 
 import android.content.Context
+import android.net.Network
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
@@ -55,8 +56,17 @@ class CastPlaybackRouter internal constructor(
 
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val networkPlayer = NetworkMediaPlayer(appContext)
-    private val dlnaAdapter = DlnaPlaybackAdapter(appContext, scope, this)
+    private val physicalNetwork = AtomicReference<Network?>(null)
+    private val networkPlayer = NetworkMediaPlayer(
+        context = appContext,
+        physicalNetworkProvider = { physicalNetwork.get() },
+    )
+    private val dlnaAdapter = DlnaPlaybackAdapter(
+        appContext,
+        scope,
+        this,
+        physicalNetworkProvider = { physicalNetwork.get() },
+    )
     private val airPlayAdapter = AirPlayPlaybackAdapter(appContext, audioManager, this)
     private val drivingPlaybackInterlock = DrivingPlaybackInterlock()
     private var networkSession: NetworkPlaybackSession? = null
@@ -134,6 +144,11 @@ class CastPlaybackRouter internal constructor(
     fun beginReceiverLifecycle() = runOnMain {
         drivingPlaybackInterlock.beginReceiverLifecycle()
         mediaControlBridge.refresh()
+    }
+
+    /** Supplies the physical network selected for sender-local media URLs. */
+    internal fun setPhysicalNetwork(network: Network?) {
+        physicalNetwork.set(network)
     }
 
     fun attachAirPlay(handle: Long, audioConfig: AudioConfig) = runOnMain {

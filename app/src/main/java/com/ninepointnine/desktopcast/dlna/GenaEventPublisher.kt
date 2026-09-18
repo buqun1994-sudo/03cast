@@ -2,6 +2,7 @@ package com.ninepointnine.desktopcast.dlna
 
 import android.util.Log
 import java.net.InetSocketAddress
+import java.net.Inet4Address
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
@@ -10,6 +11,7 @@ import java.util.concurrent.Executors
 class GenaEventPublisher(
     private val registry: GenaSubscriptionRegistry,
     private val snapshot: () -> DlnaPlaybackSnapshot,
+    private val localAddressProvider: () -> Inet4Address? = { null },
 ) {
     private val executor: ExecutorService = Executors.newFixedThreadPool(2) { task ->
         Thread(task, "dlna-gena").apply { isDaemon = true }
@@ -55,6 +57,7 @@ class GenaEventPublisher(
 
         runCatching {
             Socket().use { socket ->
+                localAddressProvider()?.let { socket.bind(InetSocketAddress(it, 0)) }
                 socket.connect(InetSocketAddress(uri.host, port), CONNECT_TIMEOUT_MS)
                 socket.soTimeout = READ_TIMEOUT_MS
                 socket.getOutputStream().run {

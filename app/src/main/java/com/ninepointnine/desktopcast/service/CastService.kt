@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.BroadcastReceiver
 import android.media.AudioManager
+import android.net.Network
 import android.os.Binder
 import android.os.Handler
 import android.os.IBinder
@@ -52,6 +53,7 @@ class CastService : LifecycleService() {
     private var safetyStateCollector: Job? = null
     private var commercialAccessBoundaryReceiverRegistered = false
     private var retainAcrossActivityRecreation = false
+    private var boundPhysicalNetwork: Network? = null
     private val coordinator = CastSessionCoordinator()
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     private val preferences by lazy { getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE) }
@@ -241,6 +243,7 @@ class CastService : LifecycleService() {
         mutableDrivingState.value = DrivingState.UNAVAILABLE
         coordinator.stop()
         networkMonitor.stop()
+        boundPhysicalNetwork = null
         runtime.stop()
         commercialAccess.clear()
         unregisterCommercialAccessBoundaryReceiver()
@@ -277,6 +280,7 @@ class CastService : LifecycleService() {
         started.set(false)
         coordinator.stop()
         networkMonitor.stop()
+        boundPhysicalNetwork = null
         runtime.stop()
         commercialAccess.clear()
         unregisterCommercialAccessBoundaryReceiver()
@@ -286,16 +290,22 @@ class CastService : LifecycleService() {
 
     private fun handleLanAddress(address: Inet4Address?, force: Boolean = false) {
         if (!started.get()) return
+        val selectedNetwork = networkMonitor.currentNetwork()
+        val physicalEndpointChanged = address != runtime.address
+        val physicalNetworkChanged = selectedNetwork != boundPhysicalNetwork
+        playback.setPhysicalNetwork(selectedNetwork)
         if (address == null) {
+            boundPhysicalNetwork = null
             runtime.stop()
             coordinator.recoverableError(null, getString(R.string.network_unavailable))
             return
         }
-        if (!force && address == runtime.address && runtime.isReady) return
+        if (!force && !physicalEndpointChanged && !physicalNetworkChanged && runtime.isReady) return
 
         coordinator.beginStart()
         try {
             runtime.start(address)
+            boundPhysicalNetwork = selectedNetwork
             coordinator.ready()
         } catch (error: Throwable) {
             onRuntimeFailure(error)
@@ -307,6 +317,7 @@ class CastService : LifecycleService() {
             if (!started.get()) return@runOnMain
             Log.e(TAG, "Receiver runtime failed", error)
             runtime.stop()
+            boundPhysicalNetwork = null
             coordinator.recoverableError(null, getString(R.string.receiver_start_failed))
         }
     }

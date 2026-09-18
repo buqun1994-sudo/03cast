@@ -2,9 +2,15 @@ package com.ninepointnine.desktopcast.media
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.util.Log
+import com.ninepointnine.desktopcast.network.PhysicalNetworkPolicy
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLConnection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -14,7 +20,11 @@ import kotlinx.coroutines.withContext
 
 class DlnaImageLoader(
     private val scope: CoroutineScope,
+    private val physicalNetworkProvider: () -> Network? = { null },
+    context: Context? = null,
 ) {
+    private val connectivity = context?.applicationContext
+        ?.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
     private var job: Job? = null
 
     fun load(
@@ -38,7 +48,16 @@ class DlnaImageLoader(
     private suspend fun downloadAndDecode(uri: String): Bitmap = withContext(Dispatchers.IO) {
         val url = URL(uri)
         require(url.protocol == "http" || url.protocol == "https") { "Unsupported image URL" }
-        val connection = (url.openConnection() as HttpURLConnection).apply {
+        val selectedNetwork = physicalNetworkProvider()
+        val rawConnection: URLConnection = if (selectedNetwork != null) {
+            Log.i(TAG, "Opening image with local-network preference: $selectedNetwork")
+            PhysicalNetworkPolicy.openConnection(
+                url,
+                selectedNetwork,
+                linkPropertiesProvider = { network -> connectivity?.getLinkProperties(network) },
+            ) ?: url.openConnection()
+        } else url.openConnection()
+        val connection = (rawConnection as HttpURLConnection).apply {
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             instanceFollowRedirects = true
@@ -80,6 +99,7 @@ class DlnaImageLoader(
     }
 
     private companion object {
+        const val TAG = "DlnaImageLoader"
         const val CONNECT_TIMEOUT_MS = 10_000
         const val READ_TIMEOUT_MS = 20_000
         const val MAX_IMAGE_BYTES = 25L * 1024 * 1024

@@ -2,6 +2,7 @@ package com.ninepointnine.desktopcast.service
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.Network
 import android.util.Log
 import com.ninepointnine.desktopcast.R
 import com.ninepointnine.desktopcast.dlna.DlnaMedia
@@ -24,10 +25,15 @@ internal class DlnaPlaybackAdapter(
     context: Context,
     scope: CoroutineScope,
     private val host: CastPlaybackRouter,
+    physicalNetworkProvider: () -> Network? = { null },
 ) : DlnaPlaybackController, NetworkPlaybackObserver {
 
     private val appContext = context.applicationContext
-    private val imageLoader = DlnaImageLoader(scope)
+    private val imageLoader = DlnaImageLoader(
+        scope = scope,
+        physicalNetworkProvider = physicalNetworkProvider,
+        context = appContext,
+    )
     @Volatile private var state = DlnaPlaybackSnapshot()
     private var lease: CastSessionLease? = null
 

@@ -1,6 +1,7 @@
 package com.ninepointnine.desktopcast.renderer
 
 import android.content.Context
+import android.net.Network
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -197,7 +198,10 @@ internal data class NetworkItemConfiguration(val allowHlsFallback: Boolean, val 
 
 // exoplayer calls stay on the main thread; native only reads the onPlaybackInfo snapshot
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-class NetworkMediaPlayer(private val context: Context) {
+class NetworkMediaPlayer(
+    private val context: Context,
+    private val physicalNetworkProvider: () -> Network? = { null },
+) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val renderersFactory = SurfaceHandoffRenderersFactory(
@@ -375,7 +379,14 @@ class NetworkMediaPlayer(private val context: Context) {
     private fun ensurePlayer(): ExoPlayer {
         player?.let { return it }
         renderersFactory.resetVideoRendererReference()
+        val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(
+            PhysicalNetworkDataSourceFactory(
+                context = context,
+                physicalNetworkProvider = physicalNetworkProvider,
+            ),
+        )
         val created = ExoPlayer.Builder(context, renderersFactory)
+            .setMediaSourceFactory(mediaSourceFactory)
             .setUseLazyPreparation(false)
             .setDetachSurfaceTimeoutMs(SURFACE_HANDOFF_TIMEOUT_MS)
             .build()

@@ -187,3 +187,12 @@
 1. 正式包名保持 `com.ninepointnine.desktopcast`；Debug/staging 测试包统一为 `com.ninepointnine.desktopcast.test`，版本名在同一正式版本后追加 `-test`。
 2. Debug/staging 与 Release 共用根目录 `release-version.properties`（当前 `1.0.2-icar03` / `versionCode=3`）；每次只递增这一份版本文件即可连续覆盖更新测试包。测试包与正式包可并存，不能互相覆盖升级。
 3. 本轮只同步构建、台账、检查和文档规则，不生成、不上传、不部署、不上线产物。
+
+## 2026-09-18 VPN 共存下的局域网投屏修复（回退主动选网后，待用户手测）
+
+1. 已取证根因：目标 `S56_HQX` / Android 9 同时存在物理 `wlan0=10.57.142.203` 与免流 VPN `tun0=10.10.0.2`。旧版 `LanAddressMonitor` 取 `ConnectivityManager.activeNetwork`，VPN 成为默认网络后，DLNA HTTP `8200` 被绑定到 `tun0`；开发机访问物理 Wi‑Fi 地址失败，SSDP 探测无法发现“03投屏”。AirPlay `7000` 和 mDNS 仍可见，因此主要故障在 DLNA / SSDP 的物理网络选择，不是设备名或 AirPlay 注册。
+2. 已施工：`LanAddressMonitor` 通过 `NET_CAPABILITY_NOT_VPN` 枚举物理网络，按默认路由、Wi‑Fi / Ethernet 和验证状态选择地址，排除 `tun*`、`ppp*`、`rmnet*`、`ccmni*`、`wwan*`、`dummy*`、`lo`；日志记录选中的地址、接口和 `Network`。VPN 开关不再直接触发接收器重启，只有物理端点变化才重绑 DLNA / AirPlay。
+3. 已保留：`CastPlaybackRouter` 将物理 `Network` 仅传给接收端发起的局域网媒体与图片连接；公网媒体及公网重定向使用系统默认网络。已删除“不经过VPN网络”设置、偏好、媒体重连和物理网络断开回退策略，未调用 `bindProcessToNetwork`，不接管免流工具和其它网络请求。
+4. 已补充：网络选择器单测覆盖 VPN 隧道排除、验证 Wi‑Fi 优先、默认路由优先和仅隧道无地址；代码 / 验证规则与 V1 施工锚点同步记录 VPN 共存边界。当前工作区未提交，未修改产品包名、版本或签名。
+5. 已验证：`compileDebugKotlin`、`compileDebugUnitTestKotlin`、网络 / DLNA 直接相关单测、`assembleDebug`、`lintDebug`、项目就绪检查、Skill 快检和 `git diff --check` 通过。全量 `:app:testDebugUnitTest` 共执行 213 条，其中 3 条既有 `IcarThemeColorPaletteTest` 主题色断言失败，本轮未修改主题资源；VPN 网络相关用例全部通过。模板快检不适用于已初始化的具体项目，03 APP 登记检查仍报告登记库旧版本 / HEAD / 工作树状态不一致，均未改写模板或登记库。
+6. 已重新枚举目标为 `10.57.142.203:5555 / S56_HQX / Android SDK 28 / 1920x1080`，执行 `ANDROID_DEVICE_SERIAL=10.57.142.203:5555 ./scripts/install-debug-to-device.sh --install-only` 成功；包名为 `com.ninepointnine.desktopcast.test`、versionCode 为 `8`。应用未启动，进程为空且 `7000 / 8200` 当前未监听，等待用户在 VPN 开启场景下手测发现和播放。

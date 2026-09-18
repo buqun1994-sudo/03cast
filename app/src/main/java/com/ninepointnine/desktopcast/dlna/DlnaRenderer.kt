@@ -31,7 +31,11 @@ class DlnaRenderer(
     private val onFailure: (Throwable) -> Unit,
 ) {
     private val subscriptions = GenaSubscriptionRegistry()
-    private val events = GenaEventPublisher(subscriptions, controller::snapshot)
+    private val events = GenaEventPublisher(
+        subscriptions,
+        controller::snapshot,
+        localAddressProvider = { localAddress },
+    )
     private val soap = DlnaSoapDispatcher(controller)
     private val clients: ExecutorService = Executors.newFixedThreadPool(6) { task ->
         Thread(task, "dlna-http-client").apply { isDaemon = true }
@@ -41,7 +45,7 @@ class DlnaRenderer(
     }
 
     @Volatile private var running = false
-    private var localAddress: Inet4Address? = null
+    @Volatile private var localAddress: Inet4Address? = null
     private var networkInterface: NetworkInterface? = null
     private var httpServer: ServerSocket? = null
     private var ssdpSocket: MulticastSocket? = null
