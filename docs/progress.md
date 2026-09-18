@@ -1,5 +1,15 @@
 # 项目进度
 
+## 2026-09-18 VPN 共存修复正式 Release 发布（完成，待真实协议验收）
+
+1. 网络修复代码已提交并推送到 `origin/main`：提交 `a74723e`（`fix: avoid VPN interfaces for cast discovery`）；保留物理网络发现与局域网媒体连接绕过 VPN 网卡的实现，已删除主动选择网络设置及媒体回退策略。
+2. `release-version.properties` 已升级为 `1.0.8-icar03` / `versionCode=9`，项目长期总纲版本引用已同步。
+3. 已使用 production commerce 配置和正式签名构建 Release APK：包名 `com.ninepointnine.desktopcast`、`debuggable=false`、APK Signature Scheme v2、正式证书 SHA-256 `14e4a7cdf1481afdb871487aa830bb0dc28910c0ba681693f11f9f1dd2fd4423`；APK 大小 `11700817` 字节，SHA-256 `a9ff57cbbc37752a0888445c5346db25ffee61d519e53dd470516160e4e0c731`。
+4. 已输出 `/Users/q/Desktop/03系列正式发布包-中文名称-20260830/03投屏-v1.0.8-icar03.apk` 与同目录 ZIP；ZIP 大小 `4827221` 字节，SHA-256 `6a734102690a8f1e969cdcab6e223c7a5f65580500e2ac94fd42244d2e901e3b`，仅含一个同名 APK，UTF-8 文件名标志有效，解压后字节与 APK 一致。
+5. 已更新同目录 `android-app-releases.json` 的 `appId=cast` 条目，保留其它应用条目、排序、启停状态和 schema。
+6. 已验证：Release 构建、`aapt dump badging`、`apksigner verify --verbose --print-certs`、APK / ZIP SHA-256、ZIP 完整性及载荷一致性、版本检查和 `git diff --check`；未安装正式包、未部署测试环境、未上线。共享 Cloud 登记库仍记录旧版本 / 旧 HEAD，直检的差异继续单独报告，未擅自修改共享登记库。
+
+
 ## 2026-09-13 统一网络视频队列正式 Release 发布（完成，待真实协议验收）
 
 1. `release-version.properties` 已递增为 `1.0.7-icar03` / `versionCode=8`，长期总纲版本引用已同步。
