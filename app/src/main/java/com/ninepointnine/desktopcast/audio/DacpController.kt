@@ -24,12 +24,24 @@ class DacpController(ctx: Context) {
     @Volatile var activeRemote = ""
     @Volatile private var host = ""
     @Volatile private var port = 0
+    @Volatile private var resolutionGeneration = 0L
+    private var discoveryListener: NsdManager.DiscoveryListener? = null
 
     fun update(dacpId: String, activeRemote: String) {
+        val credentialsChanged = this.dacpId != dacpId || this.activeRemote != activeRemote
         this.dacpId = dacpId
         this.activeRemote = activeRemote
-        _resolve()
+        if (credentialsChanged) {
+            resolutionGeneration += 1
+            stopDiscovery()
+            host = ""
+            port = 0
+            _discover(resolutionGeneration, dacpId)
+        }
     }
+
+    fun canSendCommands(): Boolean =
+        host.isNotEmpty() && port > 0 && activeRemote.isNotEmpty()
 
     fun play() = _send("/ctrl-int/1/play")
     fun pause() = _send("/ctrl-int/1/pause")
@@ -43,6 +55,8 @@ class DacpController(ctx: Context) {
     fun playResume() = _send("/ctrl-int/1/playresume")
 
     fun reset() {
+        resolutionGeneration += 1
+        stopDiscovery()
         dacpId = ""
         activeRemote = ""
         host = ""
@@ -54,43 +68,122 @@ class DacpController(ctx: Context) {
         exec.shutdownNow()
     }
 
-    private fun _resolve() {
-        if (dacpId.isEmpty()) return
-        val serviceName = "iTunes_Ctrl_$dacpId"
-        val info = NsdServiceInfo().apply {
-            serviceType = "_dacp._tcp"
-            this.serviceName = serviceName
+    private fun _discover(generation: Long, expectedDacpId: String) {
+        if (expectedDacpId.isEmpty()) return
+        val expectedServiceName = "iTunes_Ctrl_$expectedDacpId"
+        var resolving = false
+        var resolveAttempt = 0L
+        lateinit var listener: NsdManager.DiscoveryListener
+        listener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) = Unit
+
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                if (generation != resolutionGeneration || resolving || host.isNotEmpty() ||
+                    !serviceInfo.serviceName.equals(expectedServiceName, ignoreCase = true)
+                ) return
+                resolving = true
+                val attempt = ++resolveAttempt
+                resolveService(
+                    generation = generation,
+                    serviceInfo = serviceInfo,
+                    isCurrentAttempt = { attempt == resolveAttempt },
+                    onComplete = { resolving = false },
+                )
+            }
+
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) {
+                if (generation != resolutionGeneration ||
+                    !serviceInfo.serviceName.equals(expectedServiceName, ignoreCase = true)
+                ) return
+                resolveAttempt += 1
+                resolving = false
+                host = ""
+                port = 0
+                Log.i(TAG, "DACP service lost: ${serviceInfo.serviceName}")
+            }
+
+            override fun onDiscoveryStopped(serviceType: String) {
+                if (discoveryListener === listener) discoveryListener = null
+            }
+
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.w(TAG, "DACP discovery start failed: $errorCode")
+                if (discoveryListener === listener) discoveryListener = null
+            }
+
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.w(TAG, "DACP discovery stop failed: $errorCode")
+                if (discoveryListener === listener) discoveryListener = null
+            }
         }
+        discoveryListener = listener
         try {
-            nsdManager.resolveService(info, object : NsdManager.ResolveListener {
+            nsdManager.discoverServices(DACP_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+        } catch (e: Exception) {
+            if (discoveryListener === listener) discoveryListener = null
+            Log.w(TAG, "DACP discovery error", e)
+        }
+    }
+
+    private fun resolveService(
+        generation: Long,
+        serviceInfo: NsdServiceInfo,
+        isCurrentAttempt: () -> Boolean,
+        onComplete: () -> Unit,
+    ) {
+        try {
+            nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
                 override fun onResolveFailed(si: NsdServiceInfo, code: Int) {
+                    if (generation != resolutionGeneration || !isCurrentAttempt()) return
                     Log.w(TAG, "DACP resolve failed: $code")
+                    onComplete()
                 }
+
                 override fun onServiceResolved(si: NsdServiceInfo) {
-                    host = si.host.hostAddress ?: return
+                    if (generation != resolutionGeneration || !isCurrentAttempt()) return
+                    val resolvedHost = si.host.hostAddress
+                    if (resolvedHost == null || si.port <= 0) {
+                        onComplete()
+                        return
+                    }
+                    host = resolvedHost
                     port = si.port
+                    onComplete()
                     Log.i(TAG, "DACP resolved: $host:$port")
                 }
             })
         } catch (e: Exception) {
             Log.w(TAG, "DACP resolve error", e)
+            onComplete()
+        }
+    }
+
+    private fun stopDiscovery(listener: NsdManager.DiscoveryListener? = discoveryListener) {
+        listener ?: return
+        if (discoveryListener === listener) discoveryListener = null
+        try {
+            nsdManager.stopServiceDiscovery(listener)
+        } catch (_: Exception) {
+            // Discovery may already have stopped or failed to start.
         }
     }
 
     private fun _send(path: String): ListenableFuture<Unit> {
         val result = SettableFuture.create<Unit>()
-        if (host.isEmpty() || activeRemote.isEmpty()) {
+        val endpointHost = host
+        val endpointPort = port
+        val remoteToken = activeRemote
+        if (endpointHost.isEmpty() || endpointPort <= 0 || remoteToken.isEmpty()) {
             result.setException(IOException("dacp endpoint not resolved"))
             return result
         }
         try {
             exec.execute {
                 try {
-                    val url = "http://$host:$port$path"
-                    val conn = URL(url).openConnection() as HttpURLConnection
+                    val conn = URL("http", endpointHost, endpointPort, path)
+                        .openConnection() as HttpURLConnection
                     conn.requestMethod = "GET"
-                    conn.setRequestProperty("Active-Remote", activeRemote)
-                    conn.setRequestProperty("Host", "$host:$port")
+                    conn.setRequestProperty("Active-Remote", remoteToken)
                     conn.connectTimeout = 2000
                     conn.readTimeout = 2000
                     val code = conn.responseCode
@@ -115,5 +208,6 @@ class DacpController(ctx: Context) {
 
     companion object {
         private const val TAG = "DacpController"
+        private const val DACP_SERVICE_TYPE = "_dacp._tcp."
     }
 }

@@ -19,6 +19,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.ViewStub
 import android.view.WindowManager
@@ -59,6 +60,7 @@ import com.ninepointnine.desktopcast.session.CastSessionState
 import com.ninepointnine.desktopcast.window.CastWindowMode
 import com.ninepointnine.desktopcast.window.CastWindowNavigator
 import com.ninepointnine.desktopcast.window.isWindowHandoffOutputReady
+import java.util.IdentityHashMap
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -83,9 +85,21 @@ open class MainActivity : AppCompatActivity() {
     private var controlsOverlay: PopupWindow? = null
     private var controlsOverlayRequested = false
     private lateinit var mediaPlayControlGroup: View
+    private lateinit var mediaNextControlGroup: View
+    private lateinit var mediaNextControl: View
     private lateinit var mediaTimelineGroup: View
     private lateinit var mediaProgressView: View
+    private lateinit var mediaPositionView: TextView
+    private lateinit var mediaFullscreenControlGroup: View
     private lateinit var mediaFullscreenControl: View
+    private val animatedVisibilityTargets = IdentityHashMap<View, Boolean>()
+    private var gestureMode = GestureMode.IDLE
+    private var gestureStartX = 0f
+    private var gestureStartY = 0f
+    private var gestureStartPositionMs = 0L
+    private var gestureDurationMs = 0L
+    private var gesturePreviewPositionMs: Long? = null
+    private var gestureTimelineVisible = false
     private var settingsCommercialContent: View? = null
     private var settingsAboutContent: View? = null
     private lateinit var aboutVersionValue: TextView
@@ -95,6 +109,7 @@ open class MainActivity : AppCompatActivity() {
     private var lastDrivingSafetyAlert: DrivingSafetyAlert? = null
     private var drivingSafetyExitHandled = false
     private var updatingDrivingGuard = false
+    private var updatingGestureSettings = false
     private var commercialRenderer: CommercialSettingsRenderer? = null
     private var commercialController: CommercialController? = null
     private lateinit var commercialWaitingRenderer: CastCommercialWaitingRenderer
@@ -118,13 +133,27 @@ open class MainActivity : AppCompatActivity() {
 
     private enum class SettingsSection {
         RECEIVER,
+        GESTURES,
         SAFETY,
         COMMERCIAL,
         ABOUT,
     }
 
+    private enum class GestureMode {
+        IDLE,
+        UNDECIDED,
+        HORIZONTAL,
+        VERTICAL,
+        IGNORED,
+    }
+
     private val hideControls = Runnable {
         controlsVisible = false
+        renderState(lastState)
+    }
+
+    private val hideGestureTimeline = Runnable {
+        gestureTimelineVisible = false
         renderState(lastState)
     }
 
@@ -251,6 +280,9 @@ open class MainActivity : AppCompatActivity() {
     override fun onStop() {
         unregisterThemeColorObserver()
         mainHandler.removeCallbacks(hideControls)
+        mainHandler.removeCallbacks(hideGestureTimeline)
+        resetVideoGesture()
+        seeking = false
         controlsOverlayRequested = false
         controlsOverlay?.dismiss()
         binding.mediaControlView.player = null
@@ -392,6 +424,9 @@ open class MainActivity : AppCompatActivity() {
         binding.settingsNavigationReceiver.setOnClickListener {
             renderSettingsSection(SettingsSection.RECEIVER)
         }
+        binding.settingsNavigationGestures.setOnClickListener {
+            renderSettingsSection(SettingsSection.GESTURES)
+        }
         binding.settingsNavigationSafety.setOnClickListener {
             renderSettingsSection(SettingsSection.SAFETY)
         }
@@ -424,6 +459,19 @@ open class MainActivity : AppCompatActivity() {
             binding.drivingGuardWarning.isVisible = false
             applyDrivingGuard(enabled = false)
         }
+        binding.swipeUpNextSetting.setOnClickListener {
+            binding.swipeUpNextSwitch.performClick()
+        }
+        binding.horizontalSwipeSeekSetting.setOnClickListener {
+            binding.horizontalSwipeSeekSwitch.performClick()
+        }
+        binding.swipeUpNextSwitch.setOnCheckedChangeListener { _, enabled ->
+            if (!updatingGestureSettings) setSwipeUpNextEnabled(enabled)
+        }
+        binding.horizontalSwipeSeekSwitch.setOnCheckedChangeListener { _, enabled ->
+            if (!updatingGestureSettings) setHorizontalSwipeSeekEnabled(enabled)
+        }
+        renderGestureSettings()
         binding.interactionLayer.setOnClickListener {
             if (controlsVisible) hideControlsNow() else showControls()
         }
@@ -431,43 +479,207 @@ open class MainActivity : AppCompatActivity() {
     }
 
     private fun configureVideoGestures() {
-        var startX = 0f
-        var startY = 0f
-        var singlePointer = false
-        binding.interactionLayer.setOnTouchListener { view, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    startX = event.x
-                    startY = event.y
-                    singlePointer = true
+        val listener = View.OnTouchListener { view, event -> handleVideoGesture(view, event) }
+        binding.interactionLayer.setOnTouchListener(listener)
+        binding.mediaControlView.setOnTouchListener(listener)
+    }
+
+    private fun handleVideoGesture(view: View, event: MotionEvent): Boolean {
+        val deltaX = event.x - gestureStartX
+        val deltaY = event.y - gestureStartY
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                mainHandler.removeCallbacks(hideControls)
+                gestureStartX = event.x
+                gestureStartY = event.y
+                gestureStartPositionMs = lastState.positionMs
+                gestureDurationMs = lastState.durationMs
+                gesturePreviewPositionMs = null
+                gestureMode = GestureMode.UNDECIDED
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (gestureMode == GestureMode.UNDECIDED) {
+                    when (VideoGesturePolicy.lockAxis(
+                        deltaX = deltaX,
+                        deltaY = deltaY,
+                        touchSlopPx = ViewConfiguration.get(this).scaledTouchSlop.toFloat(),
+                    )) {
+                        VideoGestureAxis.HORIZONTAL -> {
+                            if (lastState.content == CastContentKind.NETWORK_VIDEO &&
+                                lastState.canSeek &&
+                                lastState.durationMs > 0L &&
+                                isHorizontalSwipeSeekEnabled()
+                            ) {
+                                beginHorizontalSeek()
+                            } else {
+                                gestureMode = GestureMode.IGNORED
+                            }
+                        }
+                        VideoGestureAxis.VERTICAL -> {
+                            gestureMode = if (lastState.content == CastContentKind.NETWORK_VIDEO) {
+                                GestureMode.VERTICAL
+                            } else {
+                                GestureMode.IGNORED
+                            }
+                        }
+                        null -> Unit
+                    }
                 }
-                MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> singlePointer = false
-                MotionEvent.ACTION_UP -> if (singlePointer) {
-                    val dx = kotlin.math.abs(event.x - startX)
-                    val dy = event.y - startY
-                    val threshold = maxOf(120f * resources.displayMetrics.density, view.height * 0.18f)
-                    if (lastState.content == CastContentKind.NETWORK_VIDEO &&
-                        kotlin.math.abs(dy) >= threshold && kotlin.math.abs(dy) > dx * 1.3f
-                    ) {
-                        val moved = if (dy < 0) castService?.nextVideo() else castService?.previousVideo()
-                        if (moved == false) android.widget.Toast.makeText(this,
-                            if (dy < 0) R.string.queue_no_next else R.string.queue_no_previous,
-                            android.widget.Toast.LENGTH_SHORT,
-                        ).show()
-                    } else if (dx < android.view.ViewConfiguration.get(this).scaledTouchSlop &&
-                        kotlin.math.abs(dy) < android.view.ViewConfiguration.get(this).scaledTouchSlop
-                    ) view.performClick()
-                    singlePointer = false
+                if (gestureMode == GestureMode.HORIZONTAL) {
+                    updateHorizontalSeek(deltaX, view.width)
                 }
             }
-            true
+            MotionEvent.ACTION_POINTER_DOWN -> cancelVideoGesture(keepIgnored = true)
+            MotionEvent.ACTION_CANCEL -> cancelVideoGesture(keepIgnored = false)
+            MotionEvent.ACTION_UP -> {
+                when (gestureMode) {
+                    GestureMode.HORIZONTAL -> finishHorizontalSeek(canceled = false)
+                    GestureMode.VERTICAL -> {
+                        if (isSwipeUpNextEnabled() &&
+                            VideoGesturePolicy.isUpSwipe(
+                                deltaY = deltaY,
+                                viewHeightPx = view.height,
+                                density = resources.displayMetrics.density,
+                            )
+                        ) {
+                            castService?.advanceToNextVideo()
+                        }
+                        resetVideoGesture()
+                        scheduleControlsIfNeeded(lastState)
+                    }
+                    GestureMode.UNDECIDED -> {
+                        val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+                        val isTap = kotlin.math.abs(deltaX) < touchSlop &&
+                            kotlin.math.abs(deltaY) < touchSlop
+                        if (isTap) view.performClick()
+                        resetVideoGesture()
+                        if (!isTap) scheduleControlsIfNeeded(lastState)
+                    }
+                    GestureMode.IGNORED,
+                    GestureMode.IDLE,
+                    -> {
+                        resetVideoGesture()
+                        scheduleControlsIfNeeded(lastState)
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    private fun beginHorizontalSeek() {
+        gestureMode = GestureMode.HORIZONTAL
+        seeking = true
+        mainHandler.removeCallbacks(hideControls)
+        mainHandler.removeCallbacks(hideGestureTimeline)
+        gestureTimelineVisible = !controlsVisible
+        gesturePreviewPositionMs = gestureStartPositionMs
+        castService?.setSeekPreview(gestureStartPositionMs)
+        renderState(lastState)
+    }
+
+    private fun updateHorizontalSeek(deltaX: Float, viewWidth: Int) {
+        gesturePreviewPositionMs = VideoGesturePolicy.previewPositionMs(
+            startPositionMs = gestureStartPositionMs,
+            deltaXPx = deltaX,
+            viewWidthPx = viewWidth,
+            durationMs = gestureDurationMs,
+        )
+        castService?.setSeekPreview(gesturePreviewPositionMs)
+        renderSeekPreview()
+    }
+
+    private fun finishHorizontalSeek(canceled: Boolean) {
+        val targetPositionMs = gesturePreviewPositionMs
+        val timelineOnly = gestureTimelineVisible
+        if (!canceled && targetPositionMs != null) {
+            castService?.seekTo(targetPositionMs)
+        }
+        seeking = false
+        resetVideoGesture()
+        renderState(lastState)
+        renderPlaybackPosition(
+            if (!canceled && targetPositionMs != null) {
+                lastState.copy(positionMs = targetPositionMs)
+            } else {
+                lastState
+            },
+        )
+        if (timelineOnly) {
+            mainHandler.removeCallbacks(hideGestureTimeline)
+            mainHandler.postDelayed(hideGestureTimeline, CONTROLS_TIMEOUT_MS)
+        } else {
+            scheduleControlsIfNeeded(lastState)
+        }
+    }
+
+    private fun cancelVideoGesture(keepIgnored: Boolean) {
+        val wasHorizontal = gestureMode == GestureMode.HORIZONTAL
+        if (wasHorizontal) {
+            finishHorizontalSeek(canceled = true)
+        } else {
+            resetVideoGesture()
+        }
+        if (keepIgnored) gestureMode = GestureMode.IGNORED
+        else if (!wasHorizontal) scheduleControlsIfNeeded(lastState)
+    }
+
+    private fun resetVideoGesture() {
+        castService?.setSeekPreview(null)
+        gestureMode = GestureMode.IDLE
+        gesturePreviewPositionMs = null
+    }
+
+    private fun renderSeekPreview() {
+        val previewPositionMs = gesturePreviewPositionMs ?: return
+        renderPlaybackPosition(lastState)
+        val deltaMs = previewPositionMs - gestureStartPositionMs
+        binding.seekFeedbackIcon.setImageResource(
+            if (deltaMs < 0L) R.drawable.ic_seek_rewind
+            else R.drawable.ic_seek_forward,
+        )
+        binding.seekFeedbackDelta.text = buildString {
+            append(if (deltaMs < 0L) '-' else '+')
+            append(formatPlaybackTime(kotlin.math.abs(deltaMs)))
+        }
+    }
+
+    private fun renderPlaybackPosition(state: CastSessionState) {
+        val previewPositionMs = gesturePreviewPositionMs
+        val displayedPositionMs = previewPositionMs ?: state.positionMs
+        val displayedDurationMs = if (previewPositionMs != null && gestureDurationMs > 0L) {
+            gestureDurationMs
+        } else {
+            state.durationMs
+        }
+        (mediaProgressView as? DefaultTimeBar)?.apply {
+            setDuration(displayedDurationMs)
+            setPosition(displayedPositionMs)
+        }
+        mediaPositionView.text = formatPlaybackTime(displayedPositionMs)
+    }
+
+    private fun formatPlaybackTime(positionMs: Long): String {
+        val totalSeconds = positionMs.coerceAtLeast(0L) / 1000L
+        val seconds = (totalSeconds % 60L).toString().padStart(2, '0')
+        val minutes = (totalSeconds / 60L % 60L).toString()
+        val hours = totalSeconds / 3600L
+        return if (hours > 0L) {
+            "$hours:${minutes.padStart(2, '0')}:$seconds"
+        } else {
+            "$minutes:$seconds"
         }
     }
 
     private fun configureMediaControls() {
         mediaPlayControlGroup = binding.mediaControlView.findViewById(R.id.cast_play_control_group)
+        mediaNextControlGroup = binding.mediaControlView.findViewById(R.id.cast_next_control_group)
+        mediaNextControl = binding.mediaControlView.findViewById(R.id.cast_next)
         mediaTimelineGroup = binding.mediaControlView.findViewById(R.id.cast_timeline_group)
         mediaProgressView = binding.mediaControlView.findViewById(androidx.media3.ui.R.id.exo_progress)
+        mediaPositionView = binding.mediaControlView.findViewById(R.id.cast_position)
+        mediaFullscreenControlGroup =
+            binding.mediaControlView.findViewById(R.id.cast_fullscreen_control_group)
         mediaFullscreenControl =
             binding.mediaControlView.findViewById(androidx.media3.ui.R.id.exo_fullscreen)
         binding.mediaControlView.setShowTimeoutMs(0)
@@ -480,6 +692,9 @@ open class MainActivity : AppCompatActivity() {
         }
         binding.mediaControlView.setOnClickListener {
             if (controlsVisible) hideControlsNow() else showControls()
+        }
+        mediaNextControl.setOnClickListener {
+            if (castService?.advanceToNextVideo() == true) showControls()
         }
         (mediaProgressView as DefaultTimeBar).addListener(object : TimeBar.OnScrubListener {
             override fun onScrubStart(timeBar: TimeBar, position: Long) {
@@ -522,6 +737,7 @@ open class MainActivity : AppCompatActivity() {
         moveToOverlay(content, binding.interactionLayer)
         moveToOverlay(content, binding.mediaControls)
         moveToOverlay(content, binding.topControls)
+        moveToOverlay(content, binding.seekFeedback)
         moveToOverlay(content, binding.safetyOverlay)
         controlsOverlay = PopupWindow(
             content,
@@ -710,6 +926,10 @@ open class MainActivity : AppCompatActivity() {
         val modeKey = Triple(state.phase, state.protocol, state.content)
         if (modeKey != lastModeKey) {
             lastModeKey = modeKey
+            mainHandler.removeCallbacks(hideGestureTimeline)
+            gestureTimelineVisible = false
+            if (gestureMode == GestureMode.HORIZONTAL) seeking = false
+            resetVideoGesture()
             controlsVisible = true
             scheduleControlsIfNeeded(state)
         }
@@ -774,21 +994,38 @@ open class MainActivity : AppCompatActivity() {
         }
         binding.mediaTitle.text = state.title
         binding.mediaTitle.isVisible = state.title.isNotBlank()
+        renderPlaybackPosition(state)
 
-        val showOverlay = active && !safetyVisible &&
+        val showFullControls = active && !safetyVisible &&
             (controlsVisible || state.content == CastContentKind.AUDIO)
-        binding.topControls.isVisible = showOverlay
-        binding.protocolLabel.isVisible = showOverlay && binding.protocolLabel.text.isNotEmpty()
+        val showGestureTimeline = active && !safetyVisible &&
+            gestureTimelineVisible && state.content == CastContentKind.NETWORK_VIDEO
+        val showMediaControls = showFullControls || showGestureTimeline
+        setAnimatedVisible(binding.topControls, showFullControls)
+        binding.protocolLabel.isVisible = showFullControls && binding.protocolLabel.text.isNotEmpty()
         binding.topControls.setBackgroundColor(Color.TRANSPARENT)
 
         val mirrorOrImage = state.content in setOf(CastContentKind.MIRROR, CastContentKind.IMAGE)
-        binding.mediaControls.isVisible = showOverlay
-        mediaPlayControlGroup.isVisible = !mirrorOrImage
-        mediaTimelineGroup.isVisible = !mirrorOrImage
+        setAnimatedVisible(binding.mediaControls, showMediaControls)
+        setAnimatedVisible(mediaPlayControlGroup, showFullControls && !mirrorOrImage)
+        val showNextControl = showFullControls &&
+            state.content == CastContentKind.NETWORK_VIDEO && state.canSeek
+        mediaNextControl.isEnabled = showNextControl
+        setAnimatedVisible(mediaNextControlGroup, showNextControl)
+        setAnimatedVisible(
+            mediaTimelineGroup,
+            (showFullControls || showGestureTimeline) && !mirrorOrImage,
+        )
+        setAnimatedVisible(mediaFullscreenControlGroup, showFullControls)
         val airPlayAudio = state.protocol == CastProtocol.AIRPLAY &&
             state.content == CastContentKind.AUDIO
         mediaProgressView.isVisible = !mirrorOrImage && !airPlayAudio
-        if (showOverlay) binding.mediaControlView.show()
+        setAnimatedVisible(
+            binding.seekFeedback,
+            active && !safetyVisible && gestureMode == GestureMode.HORIZONTAL,
+        )
+        if (showMediaControls) binding.mediaControlView.show()
+        if (gestureMode == GestureMode.HORIZONTAL) renderSeekPreview()
 
         updateControlsOverlayVisibility(active)
 
@@ -796,6 +1033,8 @@ open class MainActivity : AppCompatActivity() {
     }
 
     private fun showControls() {
+        mainHandler.removeCallbacks(hideGestureTimeline)
+        gestureTimelineVisible = false
         controlsVisible = true
         renderState(lastState)
         scheduleControlsIfNeeded(lastState)
@@ -803,9 +1042,40 @@ open class MainActivity : AppCompatActivity() {
 
     private fun hideControlsNow() {
         mainHandler.removeCallbacks(hideControls)
+        mainHandler.removeCallbacks(hideGestureTimeline)
+        gestureTimelineVisible = false
         if (lastState.content != CastContentKind.AUDIO) {
             controlsVisible = false
             renderState(lastState)
+        }
+    }
+
+    private fun setAnimatedVisible(view: View, visible: Boolean) {
+        val previousTarget = animatedVisibilityTargets.put(view, visible)
+        if (previousTarget == visible) return
+        view.animate().cancel()
+        if (visible) {
+            if (view.visibility != View.VISIBLE) {
+                view.alpha = 0f
+                view.visibility = View.VISIBLE
+            }
+            view.animate()
+                .alpha(1f)
+                .setDuration(CONTROL_FADE_DURATION_MS)
+                .withEndAction(null)
+                .start()
+        } else if (view.visibility == View.VISIBLE) {
+            view.animate()
+                .alpha(0f)
+                .setDuration(CONTROL_FADE_DURATION_MS)
+                .withEndAction {
+                    if (animatedVisibilityTargets[view] == false) {
+                        view.visibility = View.GONE
+                    }
+                }
+                .start()
+        } else {
+            view.alpha = 0f
         }
     }
 
@@ -943,10 +1213,12 @@ open class MainActivity : AppCompatActivity() {
     private fun renderSettingsSection(section: SettingsSection) {
         selectedSettingsSection = section
         val receiverSelected = section == SettingsSection.RECEIVER
+        val gesturesSelected = section == SettingsSection.GESTURES
         val safetySelected = section == SettingsSection.SAFETY
         val commercialSelected = section == SettingsSection.COMMERCIAL
         val aboutSelected = section == SettingsSection.ABOUT
         binding.settingsReceiverContent.isVisible = receiverSelected
+        binding.settingsGesturesContent.isVisible = gesturesSelected
         binding.settingsSafetyContent.isVisible = safetySelected
         settingsCommercialContent?.isVisible = commercialSelected
         settingsAboutContent?.isVisible = aboutSelected
@@ -955,6 +1227,12 @@ open class MainActivity : AppCompatActivity() {
             binding.settingsNavigationReceiverIcon,
             binding.settingsNavigationReceiverLabel,
             receiverSelected,
+        )
+        renderSettingsNavigation(
+            binding.settingsNavigationGestures,
+            binding.settingsNavigationGesturesIcon,
+            binding.settingsNavigationGesturesLabel,
+            gesturesSelected,
         )
         renderSettingsNavigation(
             binding.settingsNavigationSafety,
@@ -1011,6 +1289,35 @@ open class MainActivity : AppCompatActivity() {
             else R.string.settings_driving_guard_off_summary,
         )
     }
+
+    private fun renderGestureSettings() {
+        updatingGestureSettings = true
+        binding.swipeUpNextSwitch.isChecked = isSwipeUpNextEnabled()
+        binding.horizontalSwipeSeekSwitch.isChecked = isHorizontalSwipeSeekEnabled()
+        updatingGestureSettings = false
+    }
+
+    private fun setSwipeUpNextEnabled(enabled: Boolean) {
+        getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(Prefs.SWIPE_UP_NEXT_VIDEO, enabled)
+            .apply()
+    }
+
+    private fun isSwipeUpNextEnabled(): Boolean =
+        getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            .getBoolean(Prefs.SWIPE_UP_NEXT_VIDEO, Prefs.DEF_SWIPE_UP_NEXT_VIDEO)
+
+    private fun setHorizontalSwipeSeekEnabled(enabled: Boolean) {
+        getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(Prefs.HORIZONTAL_SWIPE_SEEK, enabled)
+            .apply()
+    }
+
+    private fun isHorizontalSwipeSeekEnabled(): Boolean =
+        getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            .getBoolean(Prefs.HORIZONTAL_SWIPE_SEEK, Prefs.DEF_HORIZONTAL_SWIPE_SEEK)
 
     private fun setDrivingGuardChecked(enabled: Boolean) {
         updatingDrivingGuard = true
@@ -1117,6 +1424,19 @@ open class MainActivity : AppCompatActivity() {
             offTrackColor = ContextCompat.getColor(this, R.color.cast_settings_switch_track_off),
             thumbColor = ContextCompat.getColor(this, R.color.cast_settings_switch_thumb),
         )
+        listOf(
+            binding.swipeUpNextSwitch,
+            binding.horizontalSwipeSeekSwitch,
+        ).forEach { switch ->
+            switch.updateThemeColors(
+                accentColor = themePalette.accentColor,
+                offTrackColor = ContextCompat.getColor(
+                    this,
+                    R.color.cast_settings_switch_track_off,
+                ),
+                thumbColor = ContextCompat.getColor(this, R.color.cast_settings_switch_thumb),
+            )
+        }
         commercialWaitingRenderer.updateAccent(
             accentColor = themePalette.accentColor,
             accentSurfaceColor = themePalette.accentSurfaceColor,
@@ -1143,6 +1463,12 @@ open class MainActivity : AppCompatActivity() {
                 binding.settingsNavigationReceiverIcon,
                 binding.settingsNavigationReceiverLabel,
                 selectedSettingsSection == SettingsSection.RECEIVER,
+            )
+            renderSettingsNavigation(
+                binding.settingsNavigationGestures,
+                binding.settingsNavigationGesturesIcon,
+                binding.settingsNavigationGesturesLabel,
+                selectedSettingsSection == SettingsSection.GESTURES,
             )
             renderSettingsNavigation(
                 binding.settingsNavigationSafety,
@@ -1215,6 +1541,7 @@ open class MainActivity : AppCompatActivity() {
         }
         listOf(
             binding.mediaControlView.findViewById<ImageView>(androidx.media3.ui.R.id.exo_play_pause),
+            binding.mediaControlView.findViewById<ImageView>(R.id.cast_next),
             binding.mediaControlView.findViewById<ImageView>(androidx.media3.ui.R.id.exo_fullscreen),
         ).forEach { control ->
             control?.let {
@@ -1229,7 +1556,7 @@ open class MainActivity : AppCompatActivity() {
             }
         }
         listOf(
-            binding.mediaControlView.findViewById<android.widget.TextView>(androidx.media3.ui.R.id.exo_position),
+            binding.mediaControlView.findViewById<android.widget.TextView>(R.id.cast_position),
             binding.mediaControlView.findViewById<android.widget.TextView>(androidx.media3.ui.R.id.exo_duration),
         ).forEach { time ->
             time?.setTextColor(controlForeground)
@@ -1309,6 +1636,7 @@ open class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val CONTROLS_TIMEOUT_MS = 3_000L
+        const val CONTROL_FADE_DURATION_MS = 180L
         const val AGREEMENT_QR_BITMAP_SIZE_PX = 512
         const val ABOUT_QR_BITMAP_SIZE_PX = 512
         const val STATE_SETTINGS_VISIBLE = "settings_visible"

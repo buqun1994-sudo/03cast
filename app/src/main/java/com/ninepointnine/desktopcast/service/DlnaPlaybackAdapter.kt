@@ -10,6 +10,7 @@ import com.ninepointnine.desktopcast.dlna.DlnaMediaKind
 import com.ninepointnine.desktopcast.dlna.DlnaPlaybackController
 import com.ninepointnine.desktopcast.dlna.DlnaPlaybackSnapshot
 import com.ninepointnine.desktopcast.dlna.DlnaTransportState
+import com.ninepointnine.desktopcast.dlna.asNaturalEndProjection
 import com.ninepointnine.desktopcast.media.DlnaImageLoader
 import com.ninepointnine.desktopcast.renderer.PlaybackSnapshot
 import com.ninepointnine.desktopcast.session.CastContentKind
@@ -25,6 +26,7 @@ internal class DlnaPlaybackAdapter(
     context: Context,
     scope: CoroutineScope,
     private val host: CastPlaybackRouter,
+    scheduler: QueueScheduler,
     physicalNetworkProvider: () -> Network? = { null },
 ) : DlnaPlaybackController, NetworkPlaybackObserver {
 
@@ -35,12 +37,18 @@ internal class DlnaPlaybackAdapter(
         context = appContext,
     )
     @Volatile private var state = DlnaPlaybackSnapshot()
+    @Volatile private var senderAdvanceProjection: DlnaPlaybackSnapshot? = null
     private var lease: CastSessionLease? = null
+    private val senderAdvanceWindow = SenderAdvanceWindow(
+        scheduler = scheduler,
+        onExpired = ::onSenderAdvanceExpired,
+    )
 
     private val mutableImage = MutableStateFlow<Bitmap?>(null)
     val image: StateFlow<Bitmap?> = mutableImage.asStateFlow()
 
     override fun setMedia(media: DlnaMedia) = host.runOnMainBlocking {
+        completeSenderAdvance("set-media")
         val newLease = host.ensureSession(CastProtocol.DLNA) ?: return@runOnMainBlocking
         state = state.copy(
             media = media,
@@ -59,12 +67,18 @@ internal class DlnaPlaybackAdapter(
     override fun setNextMedia(media: DlnaMedia?) = host.runOnMainBlocking {
         // Images use a different output path and cannot enter a network-media playlist.
         if (media?.kind == DlnaMediaKind.IMAGE) throw com.ninepointnine.desktopcast.dlna.DlnaControlException(714, "Illegal MIME-type")
+        val resolvesAdvance = media != null && senderAdvanceWindow.isActive
+        if (resolvesAdvance) completeSenderAdvance("set-next-media")
         state = state.copy(nextMedia = media)
         val activeLease = activeLease() ?: return@runOnMainBlocking
         host.setNextNetworkPlayback(activeLease, media?.toQueueItem())
+        if (resolvesAdvance && host.selectNextNetworkPlayback(activeLease)) {
+            Log.i(TAG, "Sender advance resolved by SetNextAVTransportURI")
+        }
     }
 
     override fun play() = host.runOnMainBlocking {
+        cancelSenderAdvance()
         val media = state.media ?: return@runOnMainBlocking
         val activeLease = host.ensureSession(CastProtocol.DLNA) ?: return@runOnMainBlocking
         lease = activeLease
@@ -85,6 +99,7 @@ internal class DlnaPlaybackAdapter(
     }
 
     override fun pause() = host.runOnMainBlocking {
+        cancelSenderAdvance()
         val activeLease = activeLease() ?: return@runOnMainBlocking
         state = state.copy(transportState = DlnaTransportState.PAUSED)
         host.setNetworkPlaying(activeLease, false)
@@ -92,12 +107,27 @@ internal class DlnaPlaybackAdapter(
     }
 
     override fun stop() = host.runOnMainBlocking {
+        if (senderAdvanceWindow.deferStop()) {
+            Log.i(TAG, "Deferring sender Stop during next-media handoff")
+            return@runOnMainBlocking
+        }
         val activeLease = activeLease() ?: return@runOnMainBlocking
         releaseOutput(clearMedia = false)
         host.disconnectRemoteImmediately(activeLease)
     }
 
+    override fun next(): Boolean {
+        var selected = false
+        host.runOnMainBlocking {
+            cancelSenderAdvance()
+            val activeLease = activeLease() ?: return@runOnMainBlocking
+            selected = host.selectNextNetworkPlayback(activeLease)
+        }
+        return selected
+    }
+
     override fun seekTo(positionMs: Long) = host.runOnMainBlocking {
+        cancelSenderAdvance()
         seekInternal(positionMs)
     }
 
@@ -111,9 +141,32 @@ internal class DlnaPlaybackAdapter(
         applyVolume(activeLease())
     }
 
-    override fun snapshot(): DlnaPlaybackSnapshot = state
+    override fun snapshot(): DlnaPlaybackSnapshot = senderAdvanceProjection ?: state
+
+    fun requestSenderAdvanceAtProtocolEnd(): Boolean {
+        val activeLease = activeLease() ?: return false
+        val current = state
+        if (current.media == null || current.durationMs <= 0L ||
+            !host.isNetworkPlaybackActive(activeLease)
+        ) return false
+
+        if (current.transportState != DlnaTransportState.PLAYING) {
+            host.setNetworkPlaying(activeLease, true)
+            state = state.copy(transportState = DlnaTransportState.PLAYING)
+        }
+        senderAdvanceWindow.begin()
+        senderAdvanceProjection = current.asNaturalEndProjection()
+        host.notifyDlnaTransportChanged()
+        Log.i(
+            TAG,
+            "Projected sender-visible natural end positionMs=${current.durationMs} " +
+                "stopHandoffMs=${SenderAdvanceWindow.STOP_HANDOFF_TIMEOUT_MS}",
+        )
+        return true
+    }
 
     fun toggle() {
+        cancelSenderAdvance()
         if (state.transportState == DlnaTransportState.PLAYING) pause() else play()
         host.notifyDlnaTransportChanged()
     }
@@ -124,6 +177,7 @@ internal class DlnaPlaybackAdapter(
     }
 
     fun disconnectFromUi() = host.runOnMain {
+        cancelSenderAdvance()
         val activeLease = activeLease() ?: return@runOnMain
         releaseOutput(clearMedia = true)
         host.disconnectImmediately(activeLease)
@@ -131,6 +185,7 @@ internal class DlnaPlaybackAdapter(
     }
 
     fun releaseOutput(clearMedia: Boolean) {
+        cancelSenderAdvance()
         lease?.let(host::stopNetworkPlayback)
         imageLoader.cancel()
         mutableImage.value = null
@@ -166,7 +221,9 @@ internal class DlnaPlaybackAdapter(
             durationMs = if (snapshot.duration > 0) (snapshot.duration * 1000).toLong() else 0,
         )
         host.updatePlayback(activeLease, state.positionMs, state.durationMs, transport == DlnaTransportState.PLAYING)
-        if (previousTransport != transport) host.notifyDlnaTransportChanged()
+        if (previousTransport != transport && !senderAdvanceWindow.isActive) {
+            host.notifyDlnaTransportChanged()
+        }
     }
 
     override fun onVideoSize(width: Int, height: Int, aspect: Float) = Unit
@@ -189,7 +246,9 @@ internal class DlnaPlaybackAdapter(
             host.showContent(activeLease, current.content, current.title, current.detail, state.playWhenReady)
             this.state = this.state.copy(positionMs = 0, durationMs = 0)
         }
-        if (old != this.state) host.notifyDlnaTransportChanged()
+        if (old != this.state && !senderAdvanceWindow.isActive) {
+            host.notifyDlnaTransportChanged()
+        }
     }
 
     override fun onTitle(title: String?) {
@@ -212,6 +271,10 @@ internal class DlnaPlaybackAdapter(
     }
 
     override fun onEnded() {
+        if (senderAdvanceWindow.isActive) {
+            Log.i(TAG, "Player ended while sender advance handoff remains active")
+            return
+        }
         val activeLease = activeLease() ?: return
         host.stopNetworkPlayback(activeLease)
         state = state.copy(transportState = DlnaTransportState.STOPPED)
@@ -327,6 +390,28 @@ internal class DlnaPlaybackAdapter(
     }
 
     private fun activeLease(): CastSessionLease? = lease?.takeIf(host::isCurrent)
+
+    private fun completeSenderAdvance(reason: String) {
+        if (!senderAdvanceWindow.complete()) return
+        senderAdvanceProjection = null
+        Log.i(TAG, "Sender advance completed by $reason")
+    }
+
+    private fun cancelSenderAdvance() {
+        senderAdvanceWindow.cancel()
+        senderAdvanceProjection = null
+    }
+
+    private fun onSenderAdvanceExpired(stopObserved: Boolean) {
+        val activeLease = activeLease()
+        senderAdvanceProjection = null
+        if (activeLease == null) return
+        check(stopObserved)
+        Log.i(TAG, "Sender advance expired after Stop without new media")
+        releaseOutput(clearMedia = false)
+        host.disconnectRemoteImmediately(activeLease)
+        host.notifyDlnaTransportChanged()
+    }
 
     private companion object {
         const val TAG = "DlnaPlaybackAdapter"

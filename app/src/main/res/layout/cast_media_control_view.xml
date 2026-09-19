@@ -32,6 +32,25 @@
                 android:src="@drawable/ic_play" />
         </FrameLayout>
 
+        <FrameLayout
+            android:id="@+id/cast_next_control_group"
+            android:layout_width="@dimen/cast_media_secondary_control_size"
+            android:layout_height="@dimen/cast_media_secondary_control_size"
+            android:layout_gravity="center_vertical"
+            android:layout_marginEnd="@dimen/cast_control_gap"
+            android:visibility="gone">
+
+            <ImageButton
+                android:id="@+id/cast_next"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/next_video"
+                android:padding="@dimen/cast_media_secondary_icon_padding"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_skip_next" />
+        </FrameLayout>
+
         <LinearLayout
             android:id="@+id/cast_timeline_group"
             android:layout_width="0dp"
@@ -41,7 +60,7 @@
             android:orientation="horizontal">
 
             <TextView
-                android:id="@id/exo_position"
+                android:id="@+id/cast_position"
                 android:layout_width="@dimen/cast_media_time_width"
                 android:layout_height="match_parent"
                 android:gravity="center_vertical|end"

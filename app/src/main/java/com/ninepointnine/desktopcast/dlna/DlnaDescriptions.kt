@@ -84,6 +84,7 @@ object DlnaDescriptions {
     ${action("Stop", input("InstanceID", "A_ARG_TYPE_InstanceID"))}
     ${action("Play", input("InstanceID", "A_ARG_TYPE_InstanceID") + input("Speed", "TransportPlaySpeed"))}
     ${action("Pause", input("InstanceID", "A_ARG_TYPE_InstanceID"))}
+    ${action("Next", input("InstanceID", "A_ARG_TYPE_InstanceID"))}
     ${action("Seek", input("InstanceID", "A_ARG_TYPE_InstanceID") + input("Unit", "A_ARG_TYPE_SeekMode") + input("Target", "A_ARG_TYPE_SeekTarget"))}
     ${action("GetCurrentTransportActions", input("InstanceID", "A_ARG_TYPE_InstanceID") + output("Actions", "CurrentTransportActions"))}
   </actionList>

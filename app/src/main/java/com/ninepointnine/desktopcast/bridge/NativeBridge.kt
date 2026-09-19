@@ -34,6 +34,7 @@ object NativeBridge {
         readyToPlay: Boolean,
         playWhenReady: Boolean,
     )
+    external fun nativeProjectPlaybackEnd(handle: Long)
 
     external fun nativeUpdateVideoQueue(handle: Long, currentUuid: String, evictionUuid: String)
 

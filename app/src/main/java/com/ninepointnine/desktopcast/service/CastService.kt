@@ -256,8 +256,8 @@ class CastService : LifecycleService() {
     fun clearMediaSurface(holder: SurfaceHolder) = playback.clearMediaSurface(holder)
     fun togglePlayback() = playback.togglePlayback()
     fun seekTo(positionMs: Long) = playback.seekToPosition(positionMs)
-    fun nextVideo() = playback.nextVideo()
-    fun previousVideo() = playback.previousVideo()
+    fun setSeekPreview(positionMs: Long?) = playback.setSeekPreview(positionMs)
+    fun advanceToNextVideo() = playback.advanceToNextVideo()
     fun disconnectCurrentSession() = playback.disconnectCurrentSession()
     fun isDrivingPlaybackGuardEnabled(): Boolean =
         preferences.getBoolean(Prefs.DRIVING_PLAYBACK_GUARD, Prefs.DEF_DRIVING_PLAYBACK_GUARD)

@@ -46,6 +46,12 @@ class DlnaSoapDispatcher(
                 controller.stop()
                 response(DlnaService.AV_TRANSPORT, request.name)
             }
+            "Next" -> {
+                if (!controller.next()) {
+                    throw DlnaControlException(701, "Transition not available")
+                }
+                response(DlnaService.AV_TRANSPORT, request.name)
+            }
             "Seek" -> {
                 val unit = request.required("Unit")
                 if (unit != "REL_TIME" && unit != "ABS_TIME") {
@@ -97,7 +103,7 @@ class DlnaSoapDispatcher(
             "GetCurrentTransportActions" -> response(
                 DlnaService.AV_TRANSPORT,
                 request.name,
-                "<Actions>${currentActions(snapshot)}</Actions>",
+                "<Actions>${snapshot.currentTransportActions()}</Actions>",
             )
             else -> invalidAction(request.name)
         }
@@ -186,14 +192,6 @@ class DlnaSoapDispatcher(
         if (!channel.equals("Master", ignoreCase = true)) {
             throw DlnaControlException(600, "Unsupported channel")
         }
-    }
-
-    private fun currentActions(snapshot: DlnaPlaybackSnapshot): String = when (snapshot.transportState) {
-        DlnaTransportState.NO_MEDIA -> ""
-        DlnaTransportState.STOPPED -> "Play,Stop"
-        DlnaTransportState.TRANSITIONING -> "Stop"
-        DlnaTransportState.PLAYING -> if (snapshot.durationMs > 0) "Pause,Stop,Seek" else "Pause,Stop"
-        DlnaTransportState.PAUSED -> if (snapshot.durationMs > 0) "Play,Stop,Seek" else "Play,Stop"
     }
 
     private fun volumeDb(volume: Int): Int = if (volume <= 0) -6000 else -6000 + volume * 60

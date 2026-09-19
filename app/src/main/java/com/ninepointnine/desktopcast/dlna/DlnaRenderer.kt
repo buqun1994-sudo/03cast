@@ -187,8 +187,17 @@ class DlnaRenderer(
             }
             val response = soap.dispatch(service, request.bodyUtf8())
             writeResponse(output, 200, "OK", XML_CONTENT_TYPE, response)
+            if (service == DlnaService.AV_TRANSPORT && action in LOGGED_TRANSPORT_ACTIONS) {
+                val state = controller.snapshot()
+                Log.i(
+                    TAG,
+                    "AVTransport action=$action state=${state.transportState.wireValue} " +
+                        "positionMs=${state.positionMs} durationMs=${state.durationMs} " +
+                        "hasNext=${state.nextMedia != null}",
+                )
+            }
             when (action) {
-                "SetAVTransportURI", "SetNextAVTransportURI", "Play", "Pause", "Stop", "Seek" -> publishTransportChanged()
+                "SetAVTransportURI", "SetNextAVTransportURI", "Play", "Pause", "Stop", "Next", "Seek" -> publishTransportChanged()
                 "SetVolume", "SetMute" -> publishRenderingChanged()
             }
         } catch (error: DlnaControlException) {
@@ -423,6 +432,15 @@ class DlnaRenderer(
         private const val XML_CONTENT_TYPE = "text/xml; charset=\"utf-8\""
         private const val SERVER_HEADER = "Android/9 UPnP/1.0 03Cast/1.0"
         private const val DEVICE_TYPE = "urn:schemas-upnp-org:device:MediaRenderer:1"
+        private val LOGGED_TRANSPORT_ACTIONS = setOf(
+            "SetAVTransportURI",
+            "SetNextAVTransportURI",
+            "Play",
+            "Pause",
+            "Stop",
+            "Next",
+            "Seek",
+        )
         private val SSDP_GROUP: InetAddress = InetAddress.getByName("239.255.255.250")
 
         fun stableUuid(seed: ByteArray): String =

@@ -27,10 +27,15 @@ class NetworkPlaybackQueueTest {
     }
     private class Player : PlaybackQueuePlayer {
         var projection = emptyList<PlaybackQueueItem>()
+        val projections = mutableListOf<List<PlaybackQueueItem>>()
         val selections = mutableListOf<Pair<String, Boolean>>()
         val retries = mutableListOf<Boolean>()
         var onSync: (() -> Unit)? = null
-        override fun sync(items: List<PlaybackQueueItem>) { projection = items; onSync?.invoke() }
+        override fun sync(items: List<PlaybackQueueItem>) {
+            projection = items
+            projections += items
+            onSync?.invoke()
+        }
         override fun select(item: PlaybackQueueItem, playing: Boolean) { selections += item.id to playing }
         override fun retry(playing: Boolean) { retries += playing }
     }
@@ -65,14 +70,17 @@ class NetworkPlaybackQueueTest {
     }
     @Test fun lateNextDuringGraceContinuesPlayback() {
         queue.load(item("a")); ready(); end(); clock.advance(1_000)
+        assertEquals(listOf("a"), player.projection.map { it.id })
+        val projectionCount = player.projections.size
         queue.setNext(item("b")); ready(); clock.advance(10_000)
         assertEquals("b", queue.state.currentItemId)
         assertEquals(0, ends)
         assertFalse(queue.state.awaitingNext)
+        assertFalse(player.projections.drop(projectionCount).any { it.isEmpty() })
     }
     @Test fun terminalItemEndsOnceAfterGraceAndIgnoresDuplicateEos() {
         queue.load(item("a")); ready(); end(); end()
-        clock.advance(1_499); assertEquals(0, ends)
+        clock.advance(NetworkPlaybackQueue.NEXT_ITEM_WAIT_MS - 1); assertEquals(0, ends)
         clock.advance(1); assertEquals(1, ends)
     }
     @Test fun clearCancelsEndAndAllRetries() {

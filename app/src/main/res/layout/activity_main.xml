@@ -86,6 +86,40 @@
         android:focusable="true"
         android:visibility="gone" />
 
+    <LinearLayout
+        android:id="@+id/seek_feedback"
+        android:layout_width="@dimen/cast_seek_feedback_width"
+        android:layout_height="@dimen/cast_seek_feedback_height"
+        android:layout_gravity="center"
+        android:alpha="0"
+        android:background="@drawable/cast_seek_feedback_background"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/cast_seek_feedback_horizontal_padding"
+        android:paddingEnd="@dimen/cast_seek_feedback_horizontal_padding"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/seek_feedback_icon"
+            android:layout_width="@dimen/cast_seek_feedback_icon"
+            android:layout_height="@dimen/cast_seek_feedback_icon"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_seek_forward"
+            app:tint="@color/cast_control_foreground" />
+
+        <TextView
+            android:id="@+id/seek_feedback_delta"
+            android:layout_width="@dimen/cast_seek_feedback_text_width"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/cast_seek_feedback_content_gap"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:text="+0:00"
+            android:textColor="@color/cast_control_foreground"
+            android:textSize="@dimen/cast_seek_feedback_text_size"
+            android:textStyle="bold" />
+    </LinearLayout>
+
     <FrameLayout
         android:id="@+id/waiting_content"
         android:layout_width="match_parent"
@@ -306,6 +340,37 @@
                         android:layout_weight="1"
                         android:gravity="center_vertical|start"
                         android:text="@string/settings_receiver"
+                        android:textColor="@color/cast_text_primary"
+                        android:textSize="@dimen/cast_body_size"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/settings_navigation_gestures"
+                    android:layout_width="@dimen/cast_settings_navigation_width"
+                    android:layout_height="@dimen/cast_settings_navigation_height"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="27dp"
+                    android:paddingEnd="27dp">
+
+                    <ImageView
+                        android:id="@+id/settings_navigation_gestures_icon"
+                        android:layout_width="@dimen/cast_settings_navigation_icon"
+                        android:layout_height="@dimen/cast_settings_navigation_icon"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_gesture" />
+
+                    <TextView
+                        android:id="@+id/settings_navigation_gestures_label"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginStart="@dimen/cast_settings_navigation_label_spacing"
+                        android:layout_weight="1"
+                        android:gravity="center_vertical|start"
+                        android:text="@string/settings_gestures"
                         android:textColor="@color/cast_text_primary"
                         android:textSize="@dimen/cast_body_size"
                         android:textStyle="bold" />
@@ -542,6 +607,102 @@
                                     android:text="@string/settings_receiver_protocol_summary"
                                     android:textColor="@color/cast_text_secondary"
                                     android:textSize="@dimen/cast_caption_size" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/settings_gestures_content"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:paddingStart="@dimen/cast_settings_content_padding_start"
+                            android:paddingTop="@dimen/cast_settings_content_padding_vertical"
+                            android:paddingEnd="@dimen/cast_settings_content_padding_end"
+                            android:paddingBottom="@dimen/cast_settings_content_padding_vertical"
+                            android:visibility="gone">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/settings_gestures_title"
+                                android:textColor="@color/cast_text_primary"
+                                android:textSize="@dimen/cast_title_size"
+                                android:textStyle="bold" />
+
+                            <LinearLayout
+                                android:id="@+id/swipe_up_next_setting"
+                                android:layout_width="match_parent"
+                                android:layout_height="@dimen/cast_settings_card_height"
+                                android:layout_marginTop="@dimen/cast_settings_group_spacing"
+                                android:background="@drawable/cast_settings_card"
+                                android:clickable="true"
+                                android:focusable="true"
+                                android:gravity="center_vertical"
+                                android:importantForAccessibility="no"
+                                android:orientation="horizontal"
+                                android:paddingStart="@dimen/cast_settings_card_padding"
+                                android:paddingEnd="@dimen/cast_settings_card_padding">
+
+                                <com.ninepointnine.desktopcast.IcarSwitch
+                                    android:id="@+id/swipe_up_next_switch"
+                                    android:layout_width="@dimen/cast_settings_switch_width"
+                                    android:layout_height="@dimen/cast_settings_switch_height"
+                                    android:contentDescription="@string/settings_swipe_up_next" />
+
+                                <LinearLayout
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="@dimen/cast_settings_text_spacing"
+                                    android:layout_weight="1"
+                                    android:orientation="vertical">
+
+                                    <TextView
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:text="@string/settings_swipe_up_next"
+                                        android:textColor="@color/cast_text_primary"
+                                        android:textSize="@dimen/cast_body_size"
+                                        android:textStyle="bold" />
+
+                                    <TextView
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:layout_marginTop="@dimen/cast_settings_caption_spacing"
+                                        android:text="@string/settings_swipe_up_next_summary"
+                                        android:textColor="@color/cast_text_secondary"
+                                        android:textSize="@dimen/cast_caption_size" />
+                                </LinearLayout>
+                            </LinearLayout>
+
+                            <LinearLayout
+                                android:id="@+id/horizontal_swipe_seek_setting"
+                                android:layout_width="match_parent"
+                                android:layout_height="@dimen/cast_settings_card_height"
+                                android:layout_marginTop="@dimen/cast_settings_item_spacing"
+                                android:background="@drawable/cast_settings_card"
+                                android:clickable="true"
+                                android:focusable="true"
+                                android:gravity="center_vertical"
+                                android:importantForAccessibility="no"
+                                android:orientation="horizontal"
+                                android:paddingStart="@dimen/cast_settings_card_padding"
+                                android:paddingEnd="@dimen/cast_settings_card_padding">
+
+                                <com.ninepointnine.desktopcast.IcarSwitch
+                                    android:id="@+id/horizontal_swipe_seek_switch"
+                                    android:layout_width="@dimen/cast_settings_switch_width"
+                                    android:layout_height="@dimen/cast_settings_switch_height"
+                                    android:contentDescription="@string/settings_horizontal_swipe_seek" />
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="@dimen/cast_settings_text_spacing"
+                                    android:layout_weight="1"
+                                    android:text="@string/settings_horizontal_swipe_seek"
+                                    android:textColor="@color/cast_text_primary"
+                                    android:textSize="@dimen/cast_body_size"
+                                    android:textStyle="bold" />
                             </LinearLayout>
                         </LinearLayout>
 

@@ -32,6 +32,17 @@ class CastMediaControlBridgeTest {
         assertTrue(positions.isEmpty())
     }
 
+    @Test
+    fun gesturePreviewIsTheOnlyDisplayedPositionUntilCleared() {
+        val bridge = bridge {}
+
+        assertEquals(12_000L, bridge.displayPositionMs())
+        bridge.setPositionPreview(48_000L)
+        assertEquals(48_000L, bridge.displayPositionMs())
+        bridge.setPositionPreview(null)
+        assertEquals(12_000L, bridge.displayPositionMs())
+    }
+
     private fun bridge(onSeekRequested: (Long) -> Unit) = CastMediaControlBridge(
         looper = newTestLooper(),
         snapshot = {
@@ -39,6 +50,7 @@ class CastMediaControlBridgeTest {
                 phase = CastPhase.PLAYING,
                 protocol = CastProtocol.DLNA,
                 content = CastContentKind.NETWORK_VIDEO,
+                positionMs = 12_000L,
                 durationMs = 60_000L,
                 canSeek = true,
             )

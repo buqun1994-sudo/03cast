@@ -47,6 +47,7 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->playback_rate = 0.0f;
     ctx->playback_play_when_ready = 0;
     ctx->playback_ready = 0;
+    ctx->playback_end_projection_held = 0;
 
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
     ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "(J[BJZ)V");
@@ -96,6 +97,20 @@ void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double 
     ctx->playback_rate = rate;
     ctx->playback_play_when_ready = play_when_ready;
     ctx->playback_ready = ready;
+    if (duration != -1.0) {
+        ctx->playback_end_projection_held = 0;
+    }
+    pthread_mutex_unlock(&ctx->playback_info_lock);
+}
+
+void android_callbacks_project_playback_end(android_callback_ctx_t *ctx) {
+    pthread_mutex_lock(&ctx->playback_info_lock);
+    ctx->playback_position = 0.0;
+    ctx->playback_duration = -1.0;
+    ctx->playback_rate = 0.0f;
+    ctx->playback_play_when_ready = 0;
+    ctx->playback_ready = 0;
+    ctx->playback_end_projection_held = 1;
     pthread_mutex_unlock(&ctx->playback_info_lock);
 }
 
@@ -136,9 +151,9 @@ static void _video_process_ex(void *cls, uint64_t stream_token,
 
 static void _conn_init(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    /* fires for every connection including the player's own hls fetches: clear only a stale sentinel */
+    /* A projected finish must survive the player's own HLS fetch connections. */
     pthread_mutex_lock(&ctx->playback_info_lock);
-    if (ctx->playback_duration == -1.0) {
+    if (ctx->playback_duration == -1.0 && !ctx->playback_end_projection_held) {
         ctx->playback_position = 0.0;
         ctx->playback_duration = 0.0;
         ctx->playback_rate = 0.0f;
@@ -280,6 +295,11 @@ static void _audio_remote_control_id(void *cls, const char *dacp_id, const char 
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_dacp_id, jdacp, jremote);
     (*env)->DeleteLocalRef(env, jdacp);
     (*env)->DeleteLocalRef(env, jremote);
+}
+
+/* HLS requests expose the same credentials in the opposite callback order. */
+static void _export_dacp(void *cls, const char *active_remote, const char *dacp_id) {
+    _audio_remote_control_id(cls, dacp_id, active_remote);
 }
 
 static void _audio_set_progress(void *cls, uint32_t *start, uint32_t *curr, uint32_t *end) {
@@ -454,6 +474,7 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
     cbs->audio_set_coverart = _audio_set_coverart;
     cbs->audio_stop_coverart_rendering = _audio_stop_coverart_rendering;
     cbs->audio_remote_control_id = _audio_remote_control_id;
+    cbs->export_dacp = _export_dacp;
     cbs->audio_set_progress = _audio_set_progress;
     cbs->audio_get_format = _audio_get_format;
     cbs->video_report_size = _video_report_size;

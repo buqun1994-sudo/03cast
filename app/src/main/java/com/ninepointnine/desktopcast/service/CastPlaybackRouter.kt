@@ -56,6 +56,11 @@ class CastPlaybackRouter internal constructor(
 
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val mainScheduler = QueueScheduler { delay, action ->
+        val task = Runnable(action)
+        mainHandler.postDelayed(task, delay)
+        QueueCancellation { mainHandler.removeCallbacks(task) }
+    }
     private val physicalNetwork = AtomicReference<Network?>(null)
     private val networkPlayer = NetworkMediaPlayer(
         context = appContext,
@@ -65,9 +70,15 @@ class CastPlaybackRouter internal constructor(
         appContext,
         scope,
         this,
+        mainScheduler,
         physicalNetworkProvider = { physicalNetwork.get() },
     )
-    private val airPlayAdapter = AirPlayPlaybackAdapter(appContext, audioManager, this)
+    private val airPlayAdapter = AirPlayPlaybackAdapter(
+        appContext,
+        audioManager,
+        this,
+        mainScheduler,
+    )
     private val drivingPlaybackInterlock = DrivingPlaybackInterlock()
     private var networkSession: NetworkPlaybackSession? = null
     private val mutableQueueState = MutableStateFlow(PlaybackQueueState())
@@ -87,11 +98,7 @@ class CastPlaybackRouter internal constructor(
                 networkPlayer.selectMediaItem(item.playbackId, (item.startPositionSeconds * 1000).toLong(), playing)
             override fun retry(playing: Boolean) = networkPlayer.retryCurrent(playing)
         },
-        scheduler = QueueScheduler { delay, action ->
-            val task = Runnable(action)
-            mainHandler.postDelayed(task, delay)
-            QueueCancellation { mainHandler.removeCallbacks(task) }
-        },
+        scheduler = mainScheduler,
         onStateChanged = { state ->
             if (mutableQueueState.value != state) {
                 if (mutableQueueState.value.current?.playbackId != state.current?.playbackId ||
@@ -236,14 +243,85 @@ class CastPlaybackRouter internal constructor(
         }
     }
 
-    fun nextVideo(): Boolean = moveVideo(+1)
-    fun previousVideo(): Boolean = moveVideo(-1)
+    /** Keeps Media3's periodic control refresh on the gesture-owned preview position. */
+    fun setSeekPreview(positionMs: Long?) = runOnMain {
+        val state = sessionState.value
+        val previewPositionMs = positionMs?.takeIf {
+            state.content == CastContentKind.NETWORK_VIDEO &&
+                state.canSeek &&
+                state.durationMs > 0L
+        }?.coerceIn(0L, state.durationMs)
+        mediaControlBridge.setPositionPreview(previewPositionMs)
+    }
 
-    private fun moveVideo(direction: Int): Boolean {
+    /** Uses the strongest next-item capability currently offered by the sender. */
+    fun advanceToNextVideo(): Boolean {
+        checkOnMainThread()
+        if (drivingPlaybackInterlock.isBlocked) return false
+        val session = networkSession ?: return false
+        val state = sessionState.value
+        if (!isCurrent(session.lease) ||
+            state.content != CastContentKind.NETWORK_VIDEO ||
+            networkQueue.state.current == null ||
+            networkQueue.state.awaitingNext
+        ) return false
+
+        if (networkQueue.next()) {
+            android.util.Log.i(NEXT_LOG_TAG, "strategy=queued-next applied=true")
+            return true
+        }
+
+        val currentPlaybackId = networkQueue.state.current?.playbackId ?: return false
+        if (state.protocol == CastProtocol.AIRPLAY) {
+            val protocolEndFallback: (String) -> Unit = { reason ->
+                val applied = requestSenderAdvanceAtProtocolEnd(currentPlaybackId)
+                android.util.Log.i(
+                    NEXT_LOG_TAG,
+                    "strategy=protocol-end reason=$reason applied=$applied",
+                )
+            }
+            val confirmationTimeout = Runnable { protocolEndFallback("dacp-no-new-media") }
+            if (airPlayAdapter.requestNextVideo {
+                    mainHandler.removeCallbacks(confirmationTimeout)
+                    protocolEndFallback("dacp-command-failed")
+                }
+            ) {
+                // HTTP acceptance only proves that iOS received the command.
+                // A new queue item is the authoritative transition evidence.
+                android.util.Log.i(NEXT_LOG_TAG, "strategy=dacp-next requested=true")
+                mainHandler.postDelayed(confirmationTimeout, REMOTE_NEXT_CONFIRMATION_MS)
+                return true
+            }
+            android.util.Log.i(NEXT_LOG_TAG, "strategy=dacp-next requested=false")
+        }
+
+        val applied = requestSenderAdvanceAtProtocolEnd(currentPlaybackId)
+        android.util.Log.i(
+            NEXT_LOG_TAG,
+            "strategy=protocol-end reason=no-remote-next applied=$applied",
+        )
+        return applied
+    }
+
+    /**
+     * Compatibility path for senders that only expose the current URL. It
+     * projects the protocol's real terminal state without seeking and decoding
+     * a remote media tail that the sender cannot observe.
+     */
+    private fun requestSenderAdvanceAtProtocolEnd(expectedPlaybackId: String): Boolean {
         checkOnMainThread()
         val session = networkSession ?: return false
-        if (!isCurrent(session.lease) || sessionState.value.content != CastContentKind.NETWORK_VIDEO) return false
-        return if (direction > 0) networkQueue.next() else networkQueue.previous()
+        val state = sessionState.value
+        if (!isCurrent(session.lease) ||
+            networkQueue.state.current?.playbackId != expectedPlaybackId ||
+            networkQueue.state.awaitingNext ||
+            !state.canSeek
+        ) return false
+        return when (state.protocol) {
+            CastProtocol.DLNA -> dlnaAdapter.requestSenderAdvanceAtProtocolEnd()
+            CastProtocol.AIRPLAY -> airPlayAdapter.requestSenderAdvanceAtProtocolEnd()
+            null -> false
+        }
     }
 
     fun dlnaSnapshot(): DlnaPlaybackSnapshot = dlnaAdapter.snapshot()
@@ -522,6 +600,12 @@ class CastPlaybackRouter internal constructor(
         return networkQueue.select(itemId)
     }
 
+    internal fun selectNextNetworkPlayback(lease: CastSessionLease): Boolean {
+        checkOnMainThread()
+        if (!isCurrent(lease) || networkSession?.lease != lease) return false
+        return networkQueue.next()
+    }
+
     internal fun removeNetworkPlaybackItem(lease: CastSessionLease, itemId: String) {
         checkOnMainThread()
         if (!isCurrent(lease) || networkSession?.lease != lease) return
@@ -720,6 +804,8 @@ class CastPlaybackRouter internal constructor(
 
     private companion object {
         const val MAIN_COMMAND_TIMEOUT_MS = 2_000L
+        const val REMOTE_NEXT_CONFIRMATION_MS = 1_500L
+        const val NEXT_LOG_TAG = "NextVideo"
     }
 }
 

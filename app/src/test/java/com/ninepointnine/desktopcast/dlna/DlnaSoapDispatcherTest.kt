@@ -85,6 +85,85 @@ class DlnaSoapDispatcherTest {
     }
 
     @Test
+    fun nextSelectsTheSenderProvidedUri() {
+        val player = FakePlayer()
+        val dispatcher = DlnaSoapDispatcher(player)
+        dispatcher.dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("SetAVTransportURI", "<InstanceID>0</InstanceID><CurrentURI>http://host/one.mp4</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>"),
+        )
+        dispatcher.dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("SetNextAVTransportURI", "<InstanceID>0</InstanceID><NextURI>http://host/two.mp4</NextURI><NextURIMetaData></NextURIMetaData>"),
+        )
+
+        val response = dispatcher.dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("Next", "<InstanceID>0</InstanceID>"),
+        )
+
+        assertEquals("http://host/two.mp4", player.state.media?.uri)
+        assertTrue("NextResponse" in response)
+    }
+
+    @Test
+    fun currentTransportActionsExposeNextOnlyWhenSenderProvidedIt() {
+        val player = FakePlayer()
+        val dispatcher = DlnaSoapDispatcher(player)
+        dispatcher.dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("SetAVTransportURI", "<InstanceID>0</InstanceID><CurrentURI>http://host/one.mp4</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>"),
+        )
+        dispatcher.dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("Play", "<InstanceID>0</InstanceID><Speed>1</Speed>"),
+        )
+
+        val withoutNext = dispatcher.dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("GetCurrentTransportActions", "<InstanceID>0</InstanceID>"),
+        )
+        assertTrue("<Actions>Pause,Stop</Actions>" in withoutNext)
+
+        dispatcher.dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("SetNextAVTransportURI", "<InstanceID>0</InstanceID><NextURI>http://host/two.mp4</NextURI><NextURIMetaData></NextURIMetaData>"),
+        )
+        val withNext = dispatcher.dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("GetCurrentTransportActions", "<InstanceID>0</InstanceID>"),
+        )
+        assertTrue("<Actions>Pause,Stop,Next</Actions>" in withNext)
+    }
+
+    @Test
+    fun naturalEndProjectionMatchesFinishedTransportWithoutDroppingMedia() {
+        val media = DlnaMedia(uri = "http://host/video.mp4", title = "video")
+        val playing = DlnaPlaybackSnapshot(
+            media = media,
+            transportState = DlnaTransportState.PLAYING,
+            positionMs = 12_000,
+            durationMs = 30_000,
+        )
+
+        val ended = playing.asNaturalEndProjection()
+
+        assertEquals(DlnaTransportState.STOPPED, ended.transportState)
+        assertEquals(30_000, ended.positionMs)
+        assertEquals(30_000, ended.durationMs)
+        assertEquals(media, ended.media)
+    }
+
+    @Test(expected = DlnaControlException::class)
+    fun nextWithoutSenderProvidedUriIsRejected() {
+        val player = FakePlayer()
+        DlnaSoapDispatcher(player).dispatch(
+            DlnaService.AV_TRANSPORT,
+            envelope("Next", "<InstanceID>0</InstanceID>"),
+        )
+    }
+
+    @Test
     fun metadataPlaceholderCannotOverrideCurrentUri() {
         val player = FakePlayer()
         val dispatcher = DlnaSoapDispatcher(player)
@@ -149,6 +228,12 @@ class DlnaSoapDispatcherTest {
 
         override fun stop() {
             state = state.copy(transportState = DlnaTransportState.STOPPED)
+        }
+
+        override fun next(): Boolean {
+            val next = state.nextMedia ?: return false
+            state = state.copy(media = next, nextMedia = null)
+            return true
         }
 
         override fun seekTo(positionMs: Long) {

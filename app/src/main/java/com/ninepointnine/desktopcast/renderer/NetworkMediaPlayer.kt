@@ -261,8 +261,10 @@ class NetworkMediaPlayer(
         }
         override fun onPlaybackStateChanged(state: Int) {
             Log.i(TAG, "Playback state: ${stateName(state)}")
-            if (state == Player.STATE_ENDED) onEnded?.invoke(player?.currentMediaItem?.mediaId)
             _reportPlaybackInfo()
+            // Publish the player's terminal snapshot before the queue enters
+            // its natural-end grace window.
+            if (state == Player.STATE_ENDED) onEnded?.invoke(player?.currentMediaItem?.mediaId)
         }
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             if (mediaItem?.mediaId != player?.currentMediaItem?.mediaId) return

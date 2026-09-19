@@ -213,7 +213,7 @@ internal class NetworkPlaybackQueue(
     private fun publish() { onStateChanged(state) }
     private fun sync() {
         changingPlaylist = true
-        val projection = if (state.current == null || state.awaitingNext) {
+        val projection = if (state.current == null) {
             emptyList()
         } else {
             state.items.filter { it.selectable }
@@ -228,6 +228,8 @@ internal class NetworkPlaybackQueue(
 
     companion object {
         const val PREPARATION_TIMEOUT_MS = 5_000L
+        // A short grace accepts an already-in-flight next item without holding
+        // AirPlay's terminal state long enough to suppress sender-side advance.
         const val NEXT_ITEM_WAIT_MS = 1_500L
         val RETRY_DELAYS_MS = listOf(250L, 750L, 1_500L)
     }

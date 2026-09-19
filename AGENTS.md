@@ -62,7 +62,7 @@
 2. Skill 基础结构检查执行 `node scripts/check-skills.mjs`。
 3. Android 工程建立后的普通代码最小验证为 `./scripts/gradlew-jdk17.sh assembleDebug`；改动命中已有直接相关 JVM 单测时，追加对应测试，不默认跑完整回归。
 4. UI、启动、导航、输入和网络切换等用户可见行为变化，AI 默认不执行运行级 smoke、截图、坐标点击或连续操作；必须交付包含前置条件、操作步骤、预期结果和失败记录方式的完整手测用例，由用户完成交互验收。
-5. 需要把 Debug APK 放到目标车机时，先按 `docs/architecture/rules/operations.md` 重新快速枚举车机，历史 serial 只作提示、不得据此直接判断离线；随后使用 `./scripts/install-debug-to-device.sh --install-only` 只做设备基线检查和 `adb install -r -g` 覆盖安装，不启动应用、不宣称交互通过；`--runtime-smoke` 仅在用户明确要求、里程碑或故障诊断时使用。
+5. 需要把 Debug APK 放到目标车机时，电脑端发现车机的唯一入口是 `node scripts/find-vehicle-adb.mjs --serial-only`，必须先执行该入口，禁止在它之前人工检查旧 IP、路由、ARP 或逐地址 `adb connect`；随后将返回值传给 `ANDROID_DEVICE_SERIAL` 并使用 `./scripts/install-debug-to-device.sh --install-only`，只做设备基线检查和 `adb install -r -g` 覆盖安装，不启动应用、不宣称交互通过。`--runtime-smoke` 仅在用户明确要求、里程碑或故障诊断时使用。
 6. DLNA 与 AirPlay 的真实发现、连接、画面、声音和断开恢复由目标手机与车机完成最终验收；协议状态机、构建和直接相关单测仍由机器完成，协议探测仅在本轮直接涉及且成本可控时执行。
 7. 用户报告卡顿、闪退或协议失败后，才按报告现象执行针对性日志、复现和运行诊断；不为预防性验证提前搭建或运行重型自动化。
 8. 编译通过只证明基础正确；交互结论必须引用用户手测结果，不得把安装、启动或静态检查写成 UI 已验证。

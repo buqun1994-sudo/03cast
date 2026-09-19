@@ -14,6 +14,7 @@
     <color name="cast_control_unplayed">#66FFFFFF</color>
     <color name="cast_control_buffered_audio">#66000000</color>
     <color name="cast_control_unplayed_audio">#33000000</color>
+    <color name="cast_seek_feedback_background">#CC5F6368</color>
     <color name="cast_error">#FFC83C4A</color>
     <color name="cast_settings_sidebar_background">#EBF3F3F3</color>
     <color name="cast_settings_content_background_start">#F6FCFBFC</color>

@@ -22,7 +22,20 @@ internal class CastMediaControlBridge(
     private val onSeekRequested: (Long) -> Unit,
 ) : SimpleBasePlayer(looper) {
 
+    private var positionPreviewMs: Long? = null
+
     fun refresh() = invalidateState()
+
+    /**
+     * Overrides only the position exposed to PlayerControlView while a gesture is active.
+     * Playback itself is not seeked until the Activity commits the gesture once.
+     */
+    fun setPositionPreview(positionMs: Long?) {
+        positionPreviewMs = positionMs?.coerceAtLeast(0L)
+    }
+
+    internal fun displayPositionMs(): Long =
+        positionPreviewMs ?: snapshot().positionMs.coerceAtLeast(0L)
 
     override fun getState(): State {
         val state = snapshot()
@@ -71,7 +84,7 @@ internal class CastMediaControlBridge(
             .setCurrentMediaItemIndex(0)
             .setPlaybackState(Player.STATE_READY)
             .setPlayWhenReady(state.playing, Player.PLAY_WHEN_READY_CHANGE_REASON_REMOTE)
-            .setContentPositionMs(PositionSupplier { snapshot().positionMs.coerceAtLeast(0L) })
+            .setContentPositionMs(PositionSupplier { displayPositionMs() })
             .build()
     }
 

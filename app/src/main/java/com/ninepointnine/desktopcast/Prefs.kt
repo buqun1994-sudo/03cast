@@ -9,6 +9,10 @@ object Prefs {
     const val DEF_SERVER_NAME = "03投屏"
     const val DRIVING_PLAYBACK_GUARD = "driving_playback_guard"
     const val DEF_DRIVING_PLAYBACK_GUARD = true
+    const val SWIPE_UP_NEXT_VIDEO = "swipe_up_next_video"
+    const val DEF_SWIPE_UP_NEXT_VIDEO = true
+    const val HORIZONTAL_SWIPE_SEEK = "horizontal_swipe_seek"
+    const val DEF_HORIZONTAL_SWIPE_SEEK = true
     const val FALLBACK_MAC_ADDRESS = "fallback_mac_address"
     const val AIRPLAY_DISPLAY_UUID = "airplay_display_uuid"
     val KEY_PRIORITY: String = MediaFormat.KEY_PRIORITY; const val DEF_KEY_PRIORITY = true

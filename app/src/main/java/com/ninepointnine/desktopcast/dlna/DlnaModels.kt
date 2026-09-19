@@ -50,12 +50,40 @@ data class DlnaPlaybackSnapshot(
     val muted: Boolean = false,
 )
 
+internal fun DlnaPlaybackSnapshot.asNaturalEndProjection(): DlnaPlaybackSnapshot = copy(
+    transportState = DlnaTransportState.STOPPED,
+    positionMs = durationMs.coerceAtLeast(0L),
+)
+
+internal fun DlnaPlaybackSnapshot.currentTransportActions(): String = when (transportState) {
+    DlnaTransportState.NO_MEDIA -> ""
+    DlnaTransportState.STOPPED -> listOfNotNull(
+        "Play",
+        "Stop",
+        "Next".takeIf { nextMedia != null },
+    ).joinToString(",")
+    DlnaTransportState.TRANSITIONING -> "Stop"
+    DlnaTransportState.PLAYING -> listOfNotNull(
+        "Pause",
+        "Stop",
+        "Seek".takeIf { durationMs > 0 },
+        "Next".takeIf { nextMedia != null },
+    ).joinToString(",")
+    DlnaTransportState.PAUSED -> listOfNotNull(
+        "Play",
+        "Stop",
+        "Seek".takeIf { durationMs > 0 },
+        "Next".takeIf { nextMedia != null },
+    ).joinToString(",")
+}
+
 interface DlnaPlaybackController {
     fun setMedia(media: DlnaMedia)
     fun setNextMedia(media: DlnaMedia?) = Unit
     fun play()
     fun pause()
     fun stop()
+    fun next(): Boolean = false
     fun seekTo(positionMs: Long)
     fun setVolume(percent: Int)
     fun setMuted(muted: Boolean)

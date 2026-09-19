@@ -378,6 +378,15 @@ Java_com_ninepointnine_desktopcast_bridge_NativeBridge_nativeUpdatePlaybackInfo(
 
 extern "C"
 JNIEXPORT void JNICALL
+Java_com_ninepointnine_desktopcast_bridge_NativeBridge_nativeProjectPlaybackEnd(
+        JNIEnv *env, jobject thiz, jlong handle) {
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx) return;
+    android_callbacks_project_playback_end(&ctx->cb_ctx);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
 Java_com_ninepointnine_desktopcast_bridge_NativeBridge_nativeUpdateVideoQueue(
         JNIEnv *env, jobject thiz, jlong handle, jstring currentUuid, jstring evictionUuid) {
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;

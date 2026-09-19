@@ -13,20 +13,23 @@ class GenaEventPublisher(
     private val snapshot: () -> DlnaPlaybackSnapshot,
     private val localAddressProvider: () -> Inet4Address? = { null },
 ) {
-    private val executor: ExecutorService = Executors.newFixedThreadPool(2) { task ->
+    // UPnP event SEQ values describe one ordered stream. Concurrent NOTIFY
+    // sockets can arrive out of order even when their sequence numbers were
+    // allocated correctly, which makes rapid seek/end transitions ambiguous.
+    private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
         Thread(task, "dlna-gena").apply { isDaemon = true }
     }
 
     fun publishInitial(sid: String) {
         val subscription = registry.next(sid) ?: return
         val current = snapshot()
-        executor.execute { send(subscription, body(subscription.service, current)) }
+        executor.execute { send(subscription, body(subscription.service, current), current) }
     }
 
     fun publish(service: DlnaService) {
         val current = snapshot()
         registry.nextFor(service).forEach { subscription ->
-            executor.execute { send(subscription, body(service, current)) }
+            executor.execute { send(subscription, body(service, current), current) }
         }
     }
 
@@ -34,7 +37,11 @@ class GenaEventPublisher(
         executor.shutdownNow()
     }
 
-    private fun send(subscription: GenaSubscription, body: String) {
+    private fun send(
+        subscription: GenaSubscription,
+        body: String,
+        state: DlnaPlaybackSnapshot,
+    ) {
         val uri = subscription.callback
         val port = if (uri.port >= 0) uri.port else 80
         val path = buildString {
@@ -67,6 +74,14 @@ class GenaEventPublisher(
                 }
                 socket.getInputStream().read(ByteArray(256))
             }
+            if (subscription.service == DlnaService.AV_TRANSPORT) {
+                Log.i(
+                    TAG,
+                    "GENA delivered seq=${subscription.sequence} " +
+                        "state=${state.transportState.wireValue} " +
+                        "positionMs=${state.positionMs} durationMs=${state.durationMs}",
+                )
+            }
         }.onFailure { error ->
             Log.w(TAG, "GENA notify failed for ${subscription.sid}: ${error.message}")
         }
@@ -75,7 +90,7 @@ class GenaEventPublisher(
     private fun body(service: DlnaService, state: DlnaPlaybackSnapshot): String {
         val properties = when (service) {
             DlnaService.AV_TRANSPORT -> {
-                val event = """<Event xmlns="urn:schemas-upnp-org:metadata-1-0/AVT/"><InstanceID val="0"><TransportState val="${state.transportState.wireValue}"/><CurrentTrackURI val="${DlnaXml.escape(state.media?.uri.orEmpty())}"/><AVTransportURI val="${DlnaXml.escape(state.media?.uri.orEmpty())}"/><NextAVTransportURI val="${DlnaXml.escape(state.nextMedia?.uri.orEmpty())}"/><NextAVTransportURIMetaData val="${DlnaXml.escape(state.nextMedia?.metadata.orEmpty())}"/><CurrentTrackDuration val="${DlnaXml.formatTime(state.durationMs)}"/><RelativeTimePosition val="${DlnaXml.formatTime(state.positionMs)}"/></InstanceID></Event>"""
+                val event = """<Event xmlns="urn:schemas-upnp-org:metadata-1-0/AVT/"><InstanceID val="0"><TransportState val="${state.transportState.wireValue}"/><CurrentTransportActions val="${state.currentTransportActions()}"/><CurrentTrackURI val="${DlnaXml.escape(state.media?.uri.orEmpty())}"/><AVTransportURI val="${DlnaXml.escape(state.media?.uri.orEmpty())}"/><NextAVTransportURI val="${DlnaXml.escape(state.nextMedia?.uri.orEmpty())}"/><NextAVTransportURIMetaData val="${DlnaXml.escape(state.nextMedia?.metadata.orEmpty())}"/><CurrentTrackDuration val="${DlnaXml.formatTime(state.durationMs)}"/><RelativeTimePosition val="${DlnaXml.formatTime(state.positionMs)}"/></InstanceID></Event>"""
                 "<e:property><LastChange>${DlnaXml.escape(event)}</LastChange></e:property>"
             }
             DlnaService.RENDERING_CONTROL -> {

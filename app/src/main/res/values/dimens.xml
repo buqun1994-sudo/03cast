@@ -23,6 +23,14 @@
     <dimen name="cast_media_progress_thumb">24dp</dimen>
     <dimen name="cast_media_progress_thumb_dragged">30dp</dimen>
     <dimen name="cast_media_control_bottom_margin">24dp</dimen>
+    <dimen name="cast_seek_feedback_width">420dp</dimen>
+    <dimen name="cast_seek_feedback_height">132dp</dimen>
+    <dimen name="cast_seek_feedback_horizontal_padding">32dp</dimen>
+    <dimen name="cast_seek_feedback_icon">64dp</dimen>
+    <dimen name="cast_seek_feedback_content_gap">24dp</dimen>
+    <dimen name="cast_seek_feedback_text_width">250dp</dimen>
+    <dimen name="cast_seek_feedback_text_size">42sp</dimen>
+    <dimen name="cast_seek_feedback_radius">20dp</dimen>
     <dimen name="cast_artwork_size">240dp</dimen>
     <dimen name="cast_settings_sidebar_width">345dp</dimen>
     <dimen name="cast_settings_sidebar_padding">29.5dp</dimen>
