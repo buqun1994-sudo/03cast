@@ -1,5 +1,14 @@
 # 项目进度
 
+## 2026-09-20 网络视频手势 v1.0.9 正式 Release 发布（完成）
+
+1. 已验收的网络视频下一条主链提交并推送到 `origin/main`：`265944a`（`fix: unify next-video playback behavior`）。
+2. 唯一版本真值已递增为 `1.0.9-icar03` / `versionCode=10`，项目长期总纲中的正式版与测试版引用已同步。
+3. 已使用 production Device Commerce trust bundle 与 03投屏独立正式签名构建 Release APK；实际包名 `com.ninepointnine.desktopcast`，`debuggable=false`，APK Signature Scheme v2，单一 RSA 4096 signer，证书 SHA-256 `14e4a7cdf1481afdb871487aa830bb0dc28910c0ba681693f11f9f1dd2fd4423`。
+4. 已输出 `/Users/q/Desktop/03系列正式发布包-中文名称-20260830/03投屏-v1.0.9-icar03.apk`，大小 `11723630` 字节，SHA-256 `892e84c22897dad3ff0c0e8b55ce26125bbfbaed4f76d6f72de22fcab35f7242`；同目录 ZIP 大小 `4850160` 字节，SHA-256 `80d23c2060ad3c561fb0cdbd3753cf7f98df42b80983b7b4259e5c42bd37ea5d`，仅含一个同名 APK，解压字节与独立 APK 一致。
+5. 同目录 `android-app-releases.json` 已只替换 `appId=cast` 条目为 `1.0.9-icar03 (10)` 及新 APK 大小 / SHA-256 / ZIP 名；其它 6 个应用条目、`folderUrl`、有效期、排序、启停和安装策略保持不变，production V5 输入预检通过。
+6. 已验证 production `assembleRelease`（含 R8、资源压缩与 Lint Vital）、`aapt dump badging`、`apksigner verify --verbose --print-certs`、APK / ZIP SHA-256、ZIP 完整性与单载荷一致性，以及最终 JSON production 预检。正式包未安装到车机，未部署测试环境，也未上线正式环境；共享 Cloud 登记仍为旧版本 / 旧 HEAD，按仓库边界仅报告而未越权改写。
+
 ## 2026-09-20 网络视频手势与唯一下一条主链（完成，真机验收通过）
 
 1. 上滑与控制栏“下一条”按钮现在共用同一个 Router 入口，按钮能力与实际执行共同读取 `NextVideoPolicy` 的两条明确分支：统一队列已有发送端提供的下一项时立即切换；否则对已知时长、可跳转的网络视频复用用户拖动进度条的协议 Seek 主链，跳到 `max(0, 总时长 - 1000ms)`，由最后一秒自然播放。已删除播放器精确结束、AirPlay DACP `nextitem`、确认 / 回退计时、Stop 交接延迟以及 DLNA / AirPlay 人工终态投影；手机 Stop 到达后立即走标准释放路径，后续新媒体通过协议正常接管。下滑不执行上一条，也不显示接收端队列边界提示。
@@ -7,7 +16,7 @@
 3. 横滑采用不可反转方向锁与 UI 预览：一屏宽映射整段时长，位置限制在 `0..duration`，手势期间预览位置同时驱动时间轴与应用自有当前时间文案，Media3 周期刷新无法再抢写任一显示；松手只提交一次 seek 并解除覆盖。隐藏态仅显示时间轴与时间，取消或多指介入恢复真实进度。中心反馈为固定 `420dp × 132dp` 灰色圆角容器、项目内高清矢量快进 / 快退图标和固定文字区域，不随差值文案改变宽度；控制层与反馈统一 `180ms` 淡入淡出，横滑结束后时间轴延迟 `3s` 隐藏。
 4. 根因已由源码和真机日志交叉确认。用户所称的苹果抖音 / 哔哩哔哩应用内投屏与安卓抖音本轮都实际使用 DLNA，不是 AirPlay 平台分叉。安卓和苹果抖音真实自然结束均复现 `Media3 ENDED -> 手机 Stop -> Stop 处理内释放当前输出 -> SetAVTransportURI -> Play`。相反，人工 `STOPPED + position=duration` 虽被手机完整读取，苹果抖音稳定结束、苹果哔哩哔哩稳定下一条，安卓抖音则在“继续给新地址”和“退出投屏并回手机播放”之间无稳定规律；用户已复测并撤回“约 3 秒内稳定成功”的时点假设。说明协议终态本身不等价于抖音认可的真实 EOF，手机端应用拥有最终换片决策。
 5. 当前修正删除人工 `duration=-1` JNI 与原生持有字段、`SenderAdvanceState`、DLNA / AirPlay 人工终态快照和 `NetworkMediaPlayer.finishCurrentAtEnd`。DLNA 标准 `SetNextAVTransportURI / Next` 与 AirPlay `playlistInsert` 提供的下一项进入统一队列并由第一分支选择；无下一项时第二分支只调用现有 DLNA Seek / AirPlay scrub。音频 DACP 保留，但不参与网络视频“下一条”。
-6. 基线提交为 `ae62d3f`（`feat: add playback gestures and sender advance handoff`），本轮两分支修正随当前收尾提交。手势契约、网络队列（含新增纯策略边界）、DLNA SOAP 与媒体控制桥 4 组直接相关 JVM 测试通过；`compileDebugKotlin`、`externalNativeBuildDebug`、`lintDebug`、`assembleDebug`、项目就绪、Skill、版本与 `git diff --check` 均通过。规则沉淀要求的模板快检按预期拒绝已初始化的具体项目态；共享 03 APP 登记仍停在 `1.0.6 (7)` / 旧 HEAD / clean 快照，身份 Guard 因既有登记冲突失败，本轮未越权改写 Cloud。新 Debug APK 为 `com.ninepointnine.desktopcast.test / 1.0.8-icar03-test (9)`，大小 `29340110` 字节，SHA-256 `ca9f86e8cf24cbc916807b82e44c99a6df96108aa5da6d84fe6319a87212fa1e`，已通过唯一车机发现入口覆盖安装到 `192.168.0.203:5555 / S56_HQX`，设备 `lastUpdateTime=2026-09-20 02:03:14`，安装脚本未启动应用。用户已确认新包真机测试通过，本轮没有剩余功能手测。
+6. 基线提交为 `ae62d3f`（`feat: add playback gestures and sender advance handoff`），本轮两分支修正已提交并推送为 `265944a`（`fix: unify next-video playback behavior`）。手势契约、网络队列（含新增纯策略边界）、DLNA SOAP 与媒体控制桥 4 组直接相关 JVM 测试通过；`compileDebugKotlin`、`externalNativeBuildDebug`、`lintDebug`、`assembleDebug`、项目就绪、Skill、版本与 `git diff --check` 均通过。规则沉淀要求的模板快检按预期拒绝已初始化的具体项目态；共享 03 APP 登记仍停在 `1.0.6 (7)` / 旧 HEAD / clean 快照，身份 Guard 因既有登记冲突失败，本轮未越权改写 Cloud。新 Debug APK 为 `com.ninepointnine.desktopcast.test / 1.0.8-icar03-test (9)`，大小 `29340110` 字节，SHA-256 `ca9f86e8cf24cbc916807b82e44c99a6df96108aa5da6d84fe6319a87212fa1e`，已通过唯一车机发现入口覆盖安装到 `192.168.0.203:5555 / S56_HQX`，设备 `lastUpdateTime=2026-09-20 02:03:14`，安装脚本未启动应用。用户已确认新包真机测试通过，本轮没有剩余功能手测。
 7. 安装后车机日志已记录 5 次 `strategy=near-end-seek`，目标位置均严格等于对应总时长减 `1000ms`。其中 4 次完整出现 Media3 真实 `ENDED -> 手机读取终态 -> Stop -> SetAVTransportURI -> Play -> 下一条首帧`；另 1 次手机同样发送新地址和 Play，但约 `115ms` 后再次主动发送 Stop，在下一条解码前撤销播放。五次车机入口和 Seek 行为一致，未观察到接收端分支、计时回退或协议错误；这进一步证明差异发生在手机已经开始下一条交接后的发送端决策。本轮真实发送端日志中的 `hasNext` 均为 `false`；发送端预置下一项分支由网络队列策略单测、DLNA SOAP 用例和统一入口源码契约覆盖，当前发送端未暴露该能力不作为交付阻断。
 
 ## 2026-09-18 VPN 共存修复正式 Release 发布（完成，待真实协议验收）
