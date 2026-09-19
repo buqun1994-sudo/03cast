@@ -24,6 +24,7 @@
 | 任务入口、风险分级、完成标准 | `docs/plans/codex-task-intake-template.md` |
 | 阶段施工方案、迁移方案、复杂改造 | `docs/plans/` |
 | AirPlay / DLNA 协议路线与许可证决策 | `docs/decisions/0001-AirPlay与DLNA协议主链.md` |
+| Android 工具链、ADB 与车机连接 | `docs/architecture/rules/operations.md` |
 | 验证命令、smoke、剩余手测 | `docs/testing/验证矩阵.md` |
 | Codex 工作流复盘 | `docs/testing/codex-workflow-scorecard.md` |
 | Codex 行为 eval | `docs/testing/codex-workflow-eval-cases.md` |
