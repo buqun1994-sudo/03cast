@@ -40,9 +40,6 @@ class DacpController(ctx: Context) {
         }
     }
 
-    fun canSendCommands(): Boolean =
-        host.isNotEmpty() && port > 0 && activeRemote.isNotEmpty()
-
     fun play() = _send("/ctrl-int/1/play")
     fun pause() = _send("/ctrl-int/1/pause")
     fun nextItem() = _send("/ctrl-int/1/nextitem")

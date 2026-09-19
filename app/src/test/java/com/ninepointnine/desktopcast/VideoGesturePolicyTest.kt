@@ -48,6 +48,77 @@ class VideoGesturePolicyTest {
         assertFalse(layout.contains("android:id=\"@+id/exo_position\""))
     }
 
+    @Test
+    fun receiverNextUsesProvidedItemOrSharedUiSeekPath() {
+        val appDirectory = findAppDirectory()
+        val router = File(
+            appDirectory,
+            "src/main/java/com/ninepointnine/desktopcast/service/CastPlaybackRouter.kt",
+        ).readText()
+        val player = File(
+            appDirectory,
+            "src/main/java/com/ninepointnine/desktopcast/renderer/NetworkMediaPlayer.kt",
+        ).readText()
+        val airPlayAdapter = File(
+            appDirectory,
+            "src/main/java/com/ninepointnine/desktopcast/service/AirPlayPlaybackAdapter.kt",
+        ).readText()
+        val dlnaAdapter = File(
+            appDirectory,
+            "src/main/java/com/ninepointnine/desktopcast/service/DlnaPlaybackAdapter.kt",
+        ).readText()
+        val activity = File(
+            appDirectory,
+            "src/main/java/com/ninepointnine/desktopcast/MainActivity.kt",
+        ).readText()
+        val nextEntry = router
+            .substringAfter("fun advanceToNextVideo(): Boolean")
+            .substringBefore("private fun seekFromUi(positionMs: Long): Boolean")
+        val sharedSeekEntry = router
+            .substringAfter("private fun seekFromUi(positionMs: Long): Boolean")
+            .substringBefore("fun dlnaSnapshot()")
+        val swipeEntry = activity
+            .substringAfter("GestureMode.VERTICAL ->")
+            .substringBefore("GestureMode.UNDECIDED ->")
+        val buttonEntry = activity
+            .substringAfter("mediaNextControl.setOnClickListener")
+            .substringBefore("(mediaProgressView as DefaultTimeBar)")
+
+        assertTrue(nextEntry.contains("NextVideoPolicy.resolve"))
+        assertTrue(nextEntry.contains("NextVideoAction.SelectProvidedItem"))
+        assertTrue(nextEntry.contains("networkQueue.next()"))
+        assertTrue(nextEntry.contains("strategy=provided-next"))
+        assertTrue(nextEntry.contains("is NextVideoAction.SeekNearEnd"))
+        assertTrue(nextEntry.contains("seekFromUi(action.positionMs)"))
+        assertTrue(nextEntry.contains("strategy=near-end-seek"))
+        assertTrue(nextEntry.contains("NextVideoAction.Unavailable -> false"))
+        assertTrue(sharedSeekEntry.contains("dlnaAdapter.seekFromUi(targetPositionMs)"))
+        assertTrue(sharedSeekEntry.contains("airPlayAdapter.seek(targetPositionMs)"))
+        assertFalse(sharedSeekEntry.contains("state.content != CastContentKind.NETWORK_VIDEO"))
+        assertTrue(
+            router.substringAfter("fun seekToPosition(positionMs: Long)")
+                .substringBefore("fun setSeekPreview(positionMs: Long?)")
+                .contains("seekFromUi(positionMs)"),
+        )
+        assertTrue(swipeEntry.contains("castService?.advanceToNextVideo()"))
+        assertTrue(buttonEntry.contains("castService?.advanceToNextVideo()"))
+        assertTrue(activity.contains("NextVideoPolicy.canAdvance"))
+        assertFalse(activity.contains("queue?.next != null || (state.canSeek && state.durationMs > 0L)"))
+        assertFalse(player.contains("finishCurrentAtEnd"))
+        assertFalse(nextEntry.contains("requestNextVideo"))
+        assertFalse(nextEntry.contains("projectNaturalEndForSender"))
+        assertFalse(nextEntry.contains("playWhenReady"))
+        assertFalse(nextEntry.contains("postDelayed"))
+        assertFalse(router.contains("REMOTE_NEXT_CONFIRMATION_MS"))
+        assertFalse(airPlayAdapter.contains("fun requestNextVideo"))
+        assertFalse(airPlayAdapter.contains("senderAdvance"))
+        assertFalse(dlnaAdapter.contains("senderAdvance"))
+        assertFalse(dlnaAdapter.contains("deferStop"))
+        assertFalse(airPlayAdapter.contains("deferStop"))
+        assertFalse(dlnaAdapter.contains("STOP_HANDOFF_TIMEOUT_MS"))
+        assertFalse(airPlayAdapter.contains("STOP_HANDOFF_TIMEOUT_MS"))
+    }
+
     private fun findAppDirectory(): File {
         var current = File(requireNotNull(System.getProperty("user.dir")))
         while (!File(current, "src/main").isDirectory) {

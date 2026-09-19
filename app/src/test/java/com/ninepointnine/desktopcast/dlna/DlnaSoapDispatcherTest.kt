@@ -136,24 +136,6 @@ class DlnaSoapDispatcherTest {
         assertTrue("<Actions>Pause,Stop,Next</Actions>" in withNext)
     }
 
-    @Test
-    fun naturalEndProjectionMatchesFinishedTransportWithoutDroppingMedia() {
-        val media = DlnaMedia(uri = "http://host/video.mp4", title = "video")
-        val playing = DlnaPlaybackSnapshot(
-            media = media,
-            transportState = DlnaTransportState.PLAYING,
-            positionMs = 12_000,
-            durationMs = 30_000,
-        )
-
-        val ended = playing.asNaturalEndProjection()
-
-        assertEquals(DlnaTransportState.STOPPED, ended.transportState)
-        assertEquals(30_000, ended.positionMs)
-        assertEquals(30_000, ended.durationMs)
-        assertEquals(media, ended.media)
-    }
-
     @Test(expected = DlnaControlException::class)
     fun nextWithoutSenderProvidedUriIsRejected() {
         val player = FakePlayer()

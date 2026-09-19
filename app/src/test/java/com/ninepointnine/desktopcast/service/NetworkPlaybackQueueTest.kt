@@ -187,6 +187,35 @@ class NetworkPlaybackQueueTest {
         queue.load(item("b"))
         assertEquals("b", queue.state.currentItemId); assertEquals(0, ends)
     }
+    @Test fun nextVideoPolicyAlwaysPrefersProvidedItem() {
+        assertEquals(
+            NextVideoAction.SelectProvidedItem,
+            NextVideoPolicy.resolve(hasProvidedNext = true, canSeek = false, durationMs = 0L),
+        )
+    }
+    @Test fun nextVideoPolicySeeksToOneSecondBeforeKnownEnd() {
+        assertEquals(
+            NextVideoAction.SeekNearEnd(59_000L),
+            NextVideoPolicy.resolve(hasProvidedNext = false, canSeek = true, durationMs = 60_000L),
+        )
+    }
+    @Test fun nextVideoPolicyClampsShortMediaFallbackToStart() {
+        assertEquals(
+            NextVideoAction.SeekNearEnd(0L),
+            NextVideoPolicy.resolve(hasProvidedNext = false, canSeek = true, durationMs = 750L),
+        )
+    }
+    @Test fun nextVideoPolicyRejectsUnknownOrUnseekableFallback() {
+        assertEquals(
+            NextVideoAction.Unavailable,
+            NextVideoPolicy.resolve(hasProvidedNext = false, canSeek = true, durationMs = 0L),
+        )
+        assertEquals(
+            NextVideoAction.Unavailable,
+            NextVideoPolicy.resolve(hasProvidedNext = false, canSeek = false, durationMs = 60_000L),
+        )
+        assertFalse(NextVideoPolicy.canAdvance(false, canSeek = true, durationMs = 0L))
+    }
     @Test fun thirtyVideoReplacementsKeepCurrentAndPlayerProjectionBounded() {
         repeat(30) { queue.load(item("$it")); ready() }
         assertEquals((20..29).map { "$it" }, queue.state.items.map { it.id })

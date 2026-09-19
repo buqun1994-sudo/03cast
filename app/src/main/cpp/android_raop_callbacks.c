@@ -47,7 +47,6 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->playback_rate = 0.0f;
     ctx->playback_play_when_ready = 0;
     ctx->playback_ready = 0;
-    ctx->playback_end_projection_held = 0;
 
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
     ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "(J[BJZ)V");
@@ -97,20 +96,6 @@ void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double 
     ctx->playback_rate = rate;
     ctx->playback_play_when_ready = play_when_ready;
     ctx->playback_ready = ready;
-    if (duration != -1.0) {
-        ctx->playback_end_projection_held = 0;
-    }
-    pthread_mutex_unlock(&ctx->playback_info_lock);
-}
-
-void android_callbacks_project_playback_end(android_callback_ctx_t *ctx) {
-    pthread_mutex_lock(&ctx->playback_info_lock);
-    ctx->playback_position = 0.0;
-    ctx->playback_duration = -1.0;
-    ctx->playback_rate = 0.0f;
-    ctx->playback_play_when_ready = 0;
-    ctx->playback_ready = 0;
-    ctx->playback_end_projection_held = 1;
     pthread_mutex_unlock(&ctx->playback_info_lock);
 }
 
@@ -151,9 +136,8 @@ static void _video_process_ex(void *cls, uint64_t stream_token,
 
 static void _conn_init(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    /* A projected finish must survive the player's own HLS fetch connections. */
     pthread_mutex_lock(&ctx->playback_info_lock);
-    if (ctx->playback_duration == -1.0 && !ctx->playback_end_projection_held) {
+    if (ctx->playback_duration == -1.0) {
         ctx->playback_position = 0.0;
         ctx->playback_duration = 0.0;
         ctx->playback_rate = 0.0f;

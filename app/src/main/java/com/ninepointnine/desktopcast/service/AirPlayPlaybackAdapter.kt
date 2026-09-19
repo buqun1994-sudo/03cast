@@ -21,7 +21,6 @@ import com.ninepointnine.desktopcast.renderer.VideoRenderer
 import com.ninepointnine.desktopcast.session.CastContentKind
 import com.ninepointnine.desktopcast.session.CastProtocol
 import com.ninepointnine.desktopcast.session.CastSessionLease
-import com.google.common.util.concurrent.MoreExecutors
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,7 +31,6 @@ internal class AirPlayPlaybackAdapter(
     context: Context,
     private val audioManager: AudioManager,
     private val host: CastPlaybackRouter,
-    scheduler: QueueScheduler,
 ) : RaopCallbackHandler, LogListener, NetworkPlaybackObserver {
 
     private val appContext = context.applicationContext
@@ -57,12 +55,6 @@ internal class AirPlayPlaybackAdapter(
     private var detail = ""
     private var transportDestroySequence = 0L
     private var pendingTransportDestroy: Runnable? = null
-    private var latestNetworkPlayback: PlaybackSnapshot? = null
-    private var senderAdvanceProjected = false
-    private val senderAdvanceWindow = SenderAdvanceWindow(
-        scheduler = scheduler,
-        onExpired = ::onSenderAdvanceExpired,
-    )
 
     private val mutableArtwork = MutableStateFlow<Bitmap?>(null)
     val artwork: StateFlow<Bitmap?> = mutableArtwork.asStateFlow()
@@ -70,7 +62,6 @@ internal class AirPlayPlaybackAdapter(
     val mirrorAspect: StateFlow<Float> = mutableMirrorAspect.asStateFlow()
 
     fun attach(handle: Long, audioConfig: AudioConfig) {
-        cancelSenderAdvance(restorePlaybackInfo = false)
         nativeHandle = handle
         cancelPendingTransportDestroy()
         mirrorActive = false
@@ -92,7 +83,6 @@ internal class AirPlayPlaybackAdapter(
     }
 
     fun toggle() {
-        cancelSenderAdvance(restorePlaybackInfo = true)
         val activeLease = activeLease() ?: return
         when (host.sessionState.value.content) {
             CastContentKind.NETWORK_VIDEO -> host.setNetworkPlaying(
@@ -114,7 +104,6 @@ internal class AirPlayPlaybackAdapter(
     }
 
     fun seek(positionMs: Long) {
-        cancelSenderAdvance(restorePlaybackInfo = true)
         val activeLease = activeLease() ?: return
         val state = host.sessionState.value
         val targetPositionMs = positionMs.coerceIn(
@@ -128,48 +117,6 @@ internal class AirPlayPlaybackAdapter(
             state.durationMs,
             state.playing,
         )
-    }
-
-    /** Sends a real sender-side next command when this AirPlay session exposes DACP. */
-    fun requestNextVideo(onFailure: () -> Unit): Boolean {
-        val expectedLease = activeLease() ?: return false
-        if (!dacpController.canSendCommands()) return false
-        val command = dacpController.nextItem()
-        command.addListener(
-            {
-                try {
-                    command.get()
-                    Log.i(TAG, "AirPlay DACP nextitem accepted")
-                } catch (error: Exception) {
-                    Log.w(TAG, "AirPlay DACP nextitem failed; using protocol-end fallback", error)
-                    host.runOnMain {
-                        if (activeLease() == expectedLease) onFailure()
-                    }
-                }
-            },
-            MoreExecutors.directExecutor(),
-        )
-        return true
-    }
-
-    fun requestSenderAdvanceAtProtocolEnd(): Boolean {
-        val activeLease = activeLease() ?: return false
-        val state = host.sessionState.value
-        val handle = nativeHandle
-        if (handle == 0L || state.content != CastContentKind.NETWORK_VIDEO ||
-            state.durationMs <= 0L || !host.isNetworkPlaybackActive(activeLease)
-        ) return false
-
-        if (!state.playing) host.setNetworkPlaying(activeLease, true)
-        senderAdvanceWindow.begin()
-        senderAdvanceProjected = true
-        NativeBridge.nativeProjectPlaybackEnd(handle)
-        Log.i(
-            TAG,
-            "Projected AirPlay natural-end sentinel " +
-                "stopHandoffMs=${SenderAdvanceWindow.STOP_HANDOFF_TIMEOUT_MS}",
-        )
-        return true
     }
 
     fun blockOutputForDrivingSafety() {
@@ -187,7 +134,6 @@ internal class AirPlayPlaybackAdapter(
         restoreMirrorSurfaceGeometry: Boolean = true,
         resetMirrorAspect: Boolean = true,
     ) {
-        cancelSenderAdvance(restorePlaybackInfo = false)
         cancelPendingTransportDestroy()
         lease?.let(host::stopNetworkPlayback)
         mirrorActive = false
@@ -200,7 +146,6 @@ internal class AirPlayPlaybackAdapter(
         mutableArtwork.value = null
         title = ""
         detail = ""
-        latestNetworkPlayback = null
         dacpController.reset()
         lease = null
         videoSessionId = null
@@ -479,7 +424,6 @@ internal class AirPlayPlaybackAdapter(
         location: String,
         startPositionSeconds: Float,
     ) = host.runOnMain {
-        completeSenderAdvance("new-video-item")
         cancelPendingTransportDestroy()
         val activeLease = if (videoSessionId != null && videoSessionId != sessionId) {
             host.beginAirPlayStreamSession(preserveAudio = false)?.also { lease = it }
@@ -538,10 +482,6 @@ internal class AirPlayPlaybackAdapter(
 
     override fun onVideoStop() = host.runOnMain {
         cancelPendingTransportDestroy()
-        if (senderAdvanceWindow.deferStop()) {
-            Log.i(TAG, "Deferring AirPlay video Stop during next-media handoff")
-            return@runOnMain
-        }
         val activeLease = activeLease() ?: return@runOnMain
         if (!host.isNetworkPlaybackActive(activeLease)) return@runOnMain
         host.stopNetworkPlayback(activeLease)
@@ -561,8 +501,7 @@ internal class AirPlayPlaybackAdapter(
     override fun onPlaybackInfo(snapshot: PlaybackSnapshot) {
         val activeLease = activeLease() ?: return
         if (!host.isNetworkPlaybackActive(activeLease)) return
-        latestNetworkPlayback = snapshot
-        if (!senderAdvanceWindow.isActive) publishPlaybackInfo(snapshot)
+        publishPlaybackInfo(snapshot)
         host.updatePlayback(
             activeLease,
             (snapshot.position * 1000).toLong(),
@@ -581,10 +520,6 @@ internal class AirPlayPlaybackAdapter(
     override fun onHasVideo(hasVideo: Boolean) = Unit
 
     override fun onEnded() {
-        if (senderAdvanceWindow.isActive) {
-            Log.i(TAG, "Player ended while AirPlay next-media handoff remains active")
-            return
-        }
         val activeLease = activeLease() ?: return
         host.stopNetworkPlayback(activeLease)
         lease = null
@@ -619,31 +554,6 @@ internal class AirPlayPlaybackAdapter(
             snapshot.ready,
             snapshot.playWhenReady,
         )
-    }
-
-    private fun completeSenderAdvance(reason: String) {
-        if (!senderAdvanceWindow.complete()) return
-        senderAdvanceProjected = false
-        Log.i(TAG, "AirPlay sender advance completed by $reason")
-    }
-
-    private fun cancelSenderAdvance(restorePlaybackInfo: Boolean) {
-        val wasProjected = senderAdvanceProjected
-        senderAdvanceWindow.cancel()
-        senderAdvanceProjected = false
-        if (wasProjected && restorePlaybackInfo) latestNetworkPlayback?.let(::publishPlaybackInfo)
-    }
-
-    private fun onSenderAdvanceExpired(stopObserved: Boolean) {
-        senderAdvanceProjected = false
-        val activeLease = activeLease()
-        if (activeLease == null) return
-        check(stopObserved)
-        Log.i(TAG, "AirPlay sender advance expired after Stop without new media")
-        host.stopNetworkPlayback(activeLease)
-        mirrorStreamToken = 0L
-        lease = null
-        host.disconnectRemoteImmediately(activeLease)
     }
 
     /**

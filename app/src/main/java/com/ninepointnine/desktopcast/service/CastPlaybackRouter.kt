@@ -70,14 +70,12 @@ class CastPlaybackRouter internal constructor(
         appContext,
         scope,
         this,
-        mainScheduler,
         physicalNetworkProvider = { physicalNetwork.get() },
     )
     private val airPlayAdapter = AirPlayPlaybackAdapter(
         appContext,
         audioManager,
         this,
-        mainScheduler,
     )
     private val drivingPlaybackInterlock = DrivingPlaybackInterlock()
     private var networkSession: NetworkPlaybackSession? = null
@@ -236,11 +234,7 @@ class CastPlaybackRouter internal constructor(
 
     fun seekToPosition(positionMs: Long) = runOnMain {
         if (drivingPlaybackInterlock.isBlocked) return@runOnMain
-        when (sessionState.value.protocol) {
-            CastProtocol.DLNA -> dlnaAdapter.seekFromUi(positionMs)
-            CastProtocol.AIRPLAY -> airPlayAdapter.seek(positionMs)
-            null -> Unit
-        }
+        seekFromUi(positionMs)
     }
 
     /** Keeps Media3's periodic control refresh on the gesture-owned preview position. */
@@ -254,7 +248,7 @@ class CastPlaybackRouter internal constructor(
         mediaControlBridge.setPositionPreview(previewPositionMs)
     }
 
-    /** Uses the strongest next-item capability currently offered by the sender. */
+    /** Selects a provided next item, otherwise seeks through the normal UI path. */
     fun advanceToNextVideo(): Boolean {
         checkOnMainThread()
         if (drivingPlaybackInterlock.isBlocked) return false
@@ -266,60 +260,37 @@ class CastPlaybackRouter internal constructor(
             networkQueue.state.awaitingNext
         ) return false
 
-        if (networkQueue.next()) {
-            android.util.Log.i(NEXT_LOG_TAG, "strategy=queued-next applied=true")
-            return true
-        }
-
-        val currentPlaybackId = networkQueue.state.current?.playbackId ?: return false
-        if (state.protocol == CastProtocol.AIRPLAY) {
-            val protocolEndFallback: (String) -> Unit = { reason ->
-                val applied = requestSenderAdvanceAtProtocolEnd(currentPlaybackId)
+        return when (val action = NextVideoPolicy.resolve(
+            hasProvidedNext = networkQueue.state.next != null,
+            canSeek = state.canSeek,
+            durationMs = state.durationMs,
+        )) {
+            NextVideoAction.SelectProvidedItem -> networkQueue.next().also { applied ->
+                android.util.Log.i(NEXT_LOG_TAG, "strategy=provided-next applied=$applied")
+            }
+            is NextVideoAction.SeekNearEnd -> seekFromUi(action.positionMs).also { applied ->
                 android.util.Log.i(
                     NEXT_LOG_TAG,
-                    "strategy=protocol-end reason=$reason applied=$applied",
+                    "strategy=near-end-seek targetPositionMs=${action.positionMs} applied=$applied",
                 )
             }
-            val confirmationTimeout = Runnable { protocolEndFallback("dacp-no-new-media") }
-            if (airPlayAdapter.requestNextVideo {
-                    mainHandler.removeCallbacks(confirmationTimeout)
-                    protocolEndFallback("dacp-command-failed")
-                }
-            ) {
-                // HTTP acceptance only proves that iOS received the command.
-                // A new queue item is the authoritative transition evidence.
-                android.util.Log.i(NEXT_LOG_TAG, "strategy=dacp-next requested=true")
-                mainHandler.postDelayed(confirmationTimeout, REMOTE_NEXT_CONFIRMATION_MS)
-                return true
-            }
-            android.util.Log.i(NEXT_LOG_TAG, "strategy=dacp-next requested=false")
+            NextVideoAction.Unavailable -> false
         }
-
-        val applied = requestSenderAdvanceAtProtocolEnd(currentPlaybackId)
-        android.util.Log.i(
-            NEXT_LOG_TAG,
-            "strategy=protocol-end reason=no-remote-next applied=$applied",
-        )
-        return applied
     }
 
-    /**
-     * Compatibility path for senders that only expose the current URL. It
-     * projects the protocol's real terminal state without seeking and decoding
-     * a remote media tail that the sender cannot observe.
-     */
-    private fun requestSenderAdvanceAtProtocolEnd(expectedPlaybackId: String): Boolean {
-        checkOnMainThread()
-        val session = networkSession ?: return false
+    private fun seekFromUi(positionMs: Long): Boolean {
         val state = sessionState.value
-        if (!isCurrent(session.lease) ||
-            networkQueue.state.current?.playbackId != expectedPlaybackId ||
-            networkQueue.state.awaitingNext ||
-            !state.canSeek
-        ) return false
+        if (!state.canSeek || state.durationMs <= 0L) return false
+        val targetPositionMs = positionMs.coerceIn(0L, state.durationMs)
         return when (state.protocol) {
-            CastProtocol.DLNA -> dlnaAdapter.requestSenderAdvanceAtProtocolEnd()
-            CastProtocol.AIRPLAY -> airPlayAdapter.requestSenderAdvanceAtProtocolEnd()
+            CastProtocol.DLNA -> {
+                dlnaAdapter.seekFromUi(targetPositionMs)
+                true
+            }
+            CastProtocol.AIRPLAY -> {
+                airPlayAdapter.seek(targetPositionMs)
+                true
+            }
             null -> false
         }
     }
@@ -804,7 +775,6 @@ class CastPlaybackRouter internal constructor(
 
     private companion object {
         const val MAIN_COMMAND_TIMEOUT_MS = 2_000L
-        const val REMOTE_NEXT_CONFIRMATION_MS = 1_500L
         const val NEXT_LOG_TAG = "NextVideo"
     }
 }

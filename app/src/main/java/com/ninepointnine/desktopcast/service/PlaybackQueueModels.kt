@@ -54,6 +54,35 @@ internal data class PlaybackQueueState(
     }
 }
 
+internal sealed interface NextVideoAction {
+    data object SelectProvidedItem : NextVideoAction
+    data class SeekNearEnd(val positionMs: Long) : NextVideoAction
+    data object Unavailable : NextVideoAction
+}
+
+/** One decision source for the next button and every gesture entry point. */
+internal object NextVideoPolicy {
+    const val FALLBACK_OFFSET_MS = 1_000L
+
+    fun resolve(
+        hasProvidedNext: Boolean,
+        canSeek: Boolean,
+        durationMs: Long,
+    ): NextVideoAction = when {
+        hasProvidedNext -> NextVideoAction.SelectProvidedItem
+        canSeek && durationMs > 0L -> NextVideoAction.SeekNearEnd(
+            positionMs = (durationMs - FALLBACK_OFFSET_MS).coerceAtLeast(0L),
+        )
+        else -> NextVideoAction.Unavailable
+    }
+
+    fun canAdvance(
+        hasProvidedNext: Boolean,
+        canSeek: Boolean,
+        durationMs: Long,
+    ): Boolean = resolve(hasProvidedNext, canSeek, durationMs) != NextVideoAction.Unavailable
+}
+
 internal sealed interface PlaybackQueueCommand {
     data class Offer(val item: PlaybackQueueItem, val replaceCurrent: Boolean = false) : PlaybackQueueCommand
     data class Start(val item: PlaybackQueueItem) : PlaybackQueueCommand

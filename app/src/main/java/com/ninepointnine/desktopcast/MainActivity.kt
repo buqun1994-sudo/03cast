@@ -53,6 +53,7 @@ import com.ninepointnine.desktopcast.databinding.ActivityMainBinding
 import com.ninepointnine.desktopcast.safety.DrivingSafetyAlert
 import com.ninepointnine.desktopcast.safety.DrivingState
 import com.ninepointnine.desktopcast.service.CastService
+import com.ninepointnine.desktopcast.service.NextVideoPolicy
 import com.ninepointnine.desktopcast.session.CastContentKind
 import com.ninepointnine.desktopcast.session.CastPhase
 import com.ninepointnine.desktopcast.session.CastProtocol
@@ -1008,8 +1009,15 @@ open class MainActivity : AppCompatActivity() {
         val mirrorOrImage = state.content in setOf(CastContentKind.MIRROR, CastContentKind.IMAGE)
         setAnimatedVisible(binding.mediaControls, showMediaControls)
         setAnimatedVisible(mediaPlayControlGroup, showFullControls && !mirrorOrImage)
-        val showNextControl = showFullControls &&
-            state.content == CastContentKind.NETWORK_VIDEO && state.canSeek
+        val canAdvanceVideo = state.content == CastContentKind.NETWORK_VIDEO &&
+            queue?.current != null &&
+            !queue.awaitingNext &&
+            NextVideoPolicy.canAdvance(
+                hasProvidedNext = queue.next != null,
+                canSeek = state.canSeek,
+                durationMs = state.durationMs,
+            )
+        val showNextControl = showFullControls && canAdvanceVideo
         mediaNextControl.isEnabled = showNextControl
         setAnimatedVisible(mediaNextControlGroup, showNextControl)
         setAnimatedVisible(

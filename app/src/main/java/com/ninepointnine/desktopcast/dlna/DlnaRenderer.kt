@@ -187,14 +187,19 @@ class DlnaRenderer(
             }
             val response = soap.dispatch(service, request.bodyUtf8())
             writeResponse(output, 200, "OK", XML_CONTENT_TYPE, response)
-            if (service == DlnaService.AV_TRANSPORT && action in LOGGED_TRANSPORT_ACTIONS) {
+            if (service == DlnaService.AV_TRANSPORT) {
                 val state = controller.snapshot()
-                Log.i(
-                    TAG,
-                    "AVTransport action=$action state=${state.transportState.wireValue} " +
-                        "positionMs=${state.positionMs} durationMs=${state.durationMs} " +
-                        "hasNext=${state.nextMedia != null}",
-                )
+                val terminalRead = action in TERMINAL_READ_ACTIONS &&
+                    state.transportState == DlnaTransportState.STOPPED &&
+                    state.durationMs > 0L && state.positionMs >= state.durationMs
+                if (action in LOGGED_TRANSPORT_ACTIONS || terminalRead) {
+                    Log.i(
+                        TAG,
+                        "AVTransport action=$action state=${state.transportState.wireValue} " +
+                            "positionMs=${state.positionMs} durationMs=${state.durationMs} " +
+                            "hasNext=${state.nextMedia != null}",
+                    )
+                }
             }
             when (action) {
                 "SetAVTransportURI", "SetNextAVTransportURI", "Play", "Pause", "Stop", "Next", "Seek" -> publishTransportChanged()
@@ -441,6 +446,7 @@ class DlnaRenderer(
             "Next",
             "Seek",
         )
+        private val TERMINAL_READ_ACTIONS = setOf("GetTransportInfo", "GetPositionInfo")
         private val SSDP_GROUP: InetAddress = InetAddress.getByName("239.255.255.250")
 
         fun stableUuid(seed: ByteArray): String =

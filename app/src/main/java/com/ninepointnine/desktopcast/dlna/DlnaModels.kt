@@ -50,11 +50,6 @@ data class DlnaPlaybackSnapshot(
     val muted: Boolean = false,
 )
 
-internal fun DlnaPlaybackSnapshot.asNaturalEndProjection(): DlnaPlaybackSnapshot = copy(
-    transportState = DlnaTransportState.STOPPED,
-    positionMs = durationMs.coerceAtLeast(0L),
-)
-
 internal fun DlnaPlaybackSnapshot.currentTransportActions(): String = when (transportState) {
     DlnaTransportState.NO_MEDIA -> ""
     DlnaTransportState.STOPPED -> listOfNotNull(

@@ -47,7 +47,6 @@ typedef struct {
     float playback_rate;
     int playback_play_when_ready;
     int playback_ready;
-    int playback_end_projection_held;
     char video_current_uuid[128];
     char video_eviction_uuid[128];
     AudioEngine *audio_engine;
@@ -59,8 +58,6 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx);
 void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double position,
                                              double duration, float rate, int ready,
                                              int play_when_ready);
-void android_callbacks_project_playback_end(android_callback_ctx_t *ctx);
-
 #ifdef __cplusplus
 }
 #endif
